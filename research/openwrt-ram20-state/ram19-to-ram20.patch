@@ -1,0 +1,237 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -12,7 +12,7 @@
+ typedef unsigned char c80_u8;
+ typedef unsigned long long c80_u64;
+ #define C80_TX_N 128u
+-#define C80_COMMAND_SLOTS 25u
++#define C80_COMMAND_SLOTS 27u
+ #define C80_COMMAND_BYTES 1152u
+ #define C80_NVM_BYTES 1024u
+ #define C80_NVM_COPY_BYTES 960u
+@@ -68,6 +68,7 @@
+     c80_u32 beacon_test; /* Bounded30s firmware beacon offload inside radio. */
+     c80_u32 watch_test; /* Compare idle radio vs beacon window; read-only HIF watch. */
+     c80_u32 rx0_rearm_test; /* Return completed RX0 buffers; bounded64-frame poll budget. */
++    c80_u32 beacon_state_test; /* Five stored MAC snapshots + two OEM TSF queries. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -84,7 +85,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+-    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -157,6 +158,11 @@
+     struct c80_watch_window watch[2]; /* 0 no beacon; 1 beacon enabled. */
+     c80_u32 watch_fault_phase;
+     c80_u32 rx0_rearmed,rx0_publishes,rx0_last_cpu,rx0_readback,rx0_budget_yields;
++    c80_u32 state_mask,state_guard_fault,state_phase[5],state_allones[5],state_regs[5][12];
++    c80_u64 state_us[5];
++    c80_u32 tsf_attempted[2],tsf_valid[2],tsf_category[2],tsf_ext[2],tsf_low[2],tsf_high[2];
++    c80_u32 tsf_event_bytes[2],tsf_dma_bytes[2],tsf_wait_us[2],tsf_polls[2],tsf_delta_valid;
++    c80_u64 tsf_observed_us[2],tsf_delta_us;
+ 
+ 
+ };
+@@ -368,6 +374,16 @@
+             ++r->rx_ignored; continue;
+         }
+         if(event==0xed) {
++            if(r->phase==39 || r->phase==40) {
++                c80_u32 k=r->phase-39;
++                if(p[24]!=0x3c) { ++r->rx_ignored; continue; }
++                r->tsf_ext[k]=p[24]; r->tsf_event_bytes[k]=r->last_event_len; r->tsf_dma_bytes[k]=size;
++                if(r->last_event_len!=24 || size<40) return C80_TSF_BAD_REPLY;
++                r->tsf_category[k]=c80_get16(p+28);
++                if(r->tsf_category[k]!=2) return C80_TSF_BAD_REPLY;
++                r->tsf_low[k]=c80_get32(p+32); r->tsf_high[k]=c80_get32(p+36);
++                r->tsf_valid[k]=1; *status=0; return 0;
++            }
+             if(r->phase>=33 && r->phase<=36) {
+                 c80_u32 k=r->phase-33,sync=k==0 || k==3,ext=sync?0x26:0x49;
+                 if(p[24]!=0 && p[24]!=ext) { ++r->rx_ignored; continue; }
+@@ -548,6 +564,8 @@
+         r->radio_wait_us[step]=elapsed; r->radio_polls[step]=polls;
+     } else if(r->phase>=33 && r->phase<=36) {
+         r->beacon_wait_us[r->phase-33]=elapsed; r->beacon_polls[r->phase-33]=polls;
++    } else if(r->phase==39 || r->phase==40) {
++        r->tsf_wait_us[r->phase-39]=elapsed; r->tsf_polls[r->phase-39]=polls;
+     }
+ }
+ static c80_u32 c80_exchange(struct c80_io *io,struct c80_result *r,c80_u32 cid,
+@@ -558,13 +576,14 @@
+     c80_u32 devinfo=cid==0xed && r->phase>=23 && r->phase<=26;
+     c80_u32 radio=cid==0xed && ((r->phase>=27 && r->phase<=30) || r->phase==32);
+     c80_u32 beacon=cid==0xed && r->phase>=33 && r->phase<=36;
+-    c80_u32 timeout=nvm?C80_NVM_WAIT_US:beacon?6000000u:radio?(r->phase==28?5000000u:6000000u):devinfo?C80_DEVINFO_WAIT_US:2000000u;
+-    c80_u32 poll_us=(nvm || devinfo || radio || beacon)?C80_NVM_POLL_US:50u;
+-    c80_u32 max_polls=(nvm || devinfo || radio || beacon)?timeout/poll_us:C80_MAX_POLLS;
++    c80_u32 tsf=cid==0xed && (r->phase==39 || r->phase==40);
++    c80_u32 timeout=nvm?C80_NVM_WAIT_US:(beacon || tsf)?6000000u:radio?(r->phase==28?5000000u:6000000u):devinfo?C80_DEVINFO_WAIT_US:2000000u;
++    c80_u32 poll_us=(nvm || devinfo || radio || beacon || tsf)?C80_NVM_POLL_US:50u;
++    c80_u32 max_polls=(nvm || devinfo || radio || beacon || tsf)?timeout/poll_us:C80_MAX_POLLS;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_COMMAND_SLOTS || bytes>C80_COMMAND_BYTES-64 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+     if(cid==0xed) {
+-        if(!r->main_ready || r->phase<20 || r->phase>36) return C80_QUERY_BAD;
++        if(!r->main_ready || r->phase<20 || (r->phase>36 && !tsf)) return C80_QUERY_BAD;
+         if(c80_read(io,C80_GLO)==0xffffffffu || (c80_read(io,C80_GLO)&C80_DOWNLOAD_MODE))
+             return C80_MODE_REFUSED;
+     } else if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+@@ -596,7 +615,7 @@
+         /* NVM follows OEM60s, DEVINFO the OEM6s default. A second iteration
+          * cap also bounds a frozen clock; rollback fails without unsigned
+          * wrap. No command is retried or resent while waiting. */
+-        if(nvm || devinfo || radio || beacon) {
++        if(nvm || devinfo || radio || beacon || tsf) {
+             now=io->time_us(io->context);
+             if(now<start || now-start>=timeout) break;
+         }
+@@ -848,6 +867,45 @@
+     if(s->glo&C80_DOWNLOAD_MODE) bad|=32;
+     return bad;
+ }
++/* Exact OEM4031bb30 mapping followed by4031bc6c MAC-read, not legacy
++ * offset comments from other silicon. Fields are raw/non-atomic; MIB may
++ * clear on read or be maintained by firmware, so do not subtract snapshots. */
++static const c80_u32 c80_state_regs[12]={0x18023080,0x18023110,0x18023130,
++    0x1802b010,0x1802b034,0x1802b030,0x1802b05c,0x18024000,
++    0x1802d000,0x1802d008,0x1802d010,0x180080b0};
++static c80_u32 c80_state_capture(struct c80_io *io,struct c80_result *r,c80_u32 index)
++{
++    struct c80_hif_sample guard; c80_u32 i,bad;
++    if(!io->beacon_state_test) return 0;
++    if(index>=5 || !r->main_ready || !r->radio_valid[3] || r->radio_status[3]) return C80_STATE_BAD_PREREQ;
++    bad=c80_watch_sample(io,&guard);
++    if(bad) { r->state_guard_fault=bad; return C80_HIF_CHANGED; }
++    r->state_us[index]=io->time_us(io->context); r->state_phase[index]=r->phase;
++    for(i=0;i<12;++i) {
++        r->state_regs[index][i]=c80_read(io,c80_state_regs[i]);
++        if(r->state_regs[index][i]==0xffffffffu) r->state_allones[index]|=1u<<i;
++    }
++    r->state_mask|=1u<<index; return 0;
++}
++static c80_u32 c80_state_tsf(struct c80_io *io,struct c80_result *r,c80_u32 index)
++{
++    c80_u8 body[104]; c80_u32 i,rc,status=~0u; c80_u64 before,after;
++    if(!io->beacon_state_test) return 0;
++    if(index>=2) return C80_STATE_BAD_PREREQ;
++    for(i=0;i<104;++i) body[i]=0;
++    c80_put16(body,2); /* OEM4031469c: TSF category2, OwnMac0 at body+4. */
++    c80_stage(io,r,39+index); r->tsf_attempted[index]=1;
++    rc=c80_exchange(io,r,0xed,body,104,&status);
++    if(rc) return rc;
++    if(!r->tsf_valid[index]) return C80_TSF_BAD_REPLY;
++    r->tsf_observed_us[index]=io->time_us(io->context);
++    if(index && r->tsf_valid[0]) {
++        before=((c80_u64)r->tsf_high[0]<<32)|r->tsf_low[0];
++        after=((c80_u64)r->tsf_high[1]<<32)|r->tsf_low[1];
++        if(after>=before) { r->tsf_delta_valid=1; r->tsf_delta_us=after-before; }
++    }
++    return 0; /* Zero/stationary/backwards TSF is diagnostic data, not failure. */
++}
+ static c80_u32 c80_watch_window(struct c80_io *io,struct c80_result *r,c80_u32 index)
+ {
+     struct c80_watch_window *w=&r->watch[index];
+@@ -888,6 +946,7 @@
+     if(!r->nvm_equal || !r->devinfo_valid[0] || r->devinfo_status[0] ||
+        !r->bss_valid[0] || r->bss_status[0]) return C80_BEACON_BAD_STATE;
+     for(i=0;i<4;++i) if(!r->radio_valid[i] || r->radio_status[i]) return C80_BEACON_BAD_STATE;
++    rc=c80_state_capture(io,r,0); if(rc) return rc;
+     if(io->watch_test) {
+         c80_stage(io,r,38);
+         rc=c80_watch_window(io,r,0);
+@@ -910,13 +969,18 @@
+         rc=c80_exchange(io,r,0xed,body,n,&status);
+         if(rc) return rc;
+         if(!r->beacon_valid[k] || status) return C80_BEACON_REJECTED;
++        if(k==0 || k==3) { rc=c80_state_capture(io,r,k==0?1:4); if(rc) return rc; }
+         if(k==1) {
++            rc=c80_state_capture(io,r,2); if(rc) return rc;
++            rc=c80_state_tsf(io,r,0); if(rc) return rc;
+             c80_stage(io,r,37); r->beacon_window_started=1;
+             if(io->watch_test) {
+                 rc=c80_watch_window(io,r,1);
+                 r->beacon_window_us=r->watch[1].elapsed_us;
+                 r->beacon_window_polls=r->watch[1].samples?r->watch[1].samples-1:0;
+                 if(rc) return rc;
++                rc=c80_state_capture(io,r,3); if(rc) return rc;
++                rc=c80_state_tsf(io,r,1); if(rc) return rc;
+                 continue;
+             }
+             start=io->time_us(io->context);
+@@ -1115,6 +1179,9 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->beacon_state_test && (!io->beacon_test || !io->watch_test || !io->rx0_rearm_test)) {
++        r->primary=C80_STATE_BAD_PREREQ; return C80_STATE_BAD_PREREQ;
++    }
+     if(io->rx0_rearm_test && !io->radio_test) {
+         r->primary=C80_RADIO_BAD_STATE; return C80_RADIO_BAD_STATE;
+     }
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -309,6 +309,28 @@
+         r->beacon_window_started,r->beacon_window_us,r->beacon_window_polls);
+     mutex_unlock(&c->lock); return n;
+ }
++/* Emit only saved observations: reading sysfs never accesses MAC MMIO. */
++static ssize_t state_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    static const char *const names[]={"mac_on","sync_on","beacon_begin","beacon_end","sync_off"};
++    struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n=0; unsigned i; const c80_u32 *v;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock); r=&c->result;
++    n+=sysfs_emit_at(buf,n,"state=1 snapshots=%02x guard_fault=%02x MMIO_config_writes=0 counters_may_clear_on_read=1 tsf_delta_valid=%u tsf_delta_us=%llu\n",
++        r->state_mask,r->state_guard_fault,r->tsf_delta_valid,(unsigned long long)r->tsf_delta_us);
++    for(i=0;i<2;++i)
++        n+=sysfs_emit_at(buf,n,"tsf_%s attempted=%u valid=%u ext=%02x category=%u low=%08x high=%08x event=%u dma=%u observed_us=%llu wait_us=%u polls=%u\n",
++            i?"end":"begin",r->tsf_attempted[i],r->tsf_valid[i],r->tsf_ext[i],r->tsf_category[i],r->tsf_low[i],r->tsf_high[i],r->tsf_event_bytes[i],r->tsf_dma_bytes[i],
++            (unsigned long long)r->tsf_observed_us[i],r->tsf_wait_us[i],r->tsf_polls[i]);
++    for(i=0;i<5;++i) {
++        v=r->state_regs[i];
++        n+=sysfs_emit_at(buf,n,"%s valid=%u phase=%u observed_us=%llu allones=%03x arb_scr=%08x tqsm=%08x tqfm=%08x\n",
++            names[i],!!(r->state_mask&(1u<<i)),r->state_phase[i],(unsigned long long)r->state_us[i],r->state_allones[i],v[0],v[1],v[2]);
++        n+=sysfs_emit_at(buf,n,"%s t0cr=%08x t0tpcr=%08x pisr=%08x mptcr=%08x tmac=%08x\n",names[i],v[3],v[4],v[5],v[6],v[7]);
++        n+=sysfs_emit_at(buf,n,"%s mib_scr0=%08x mib_scr1=%08x mib_sdr0=%08x bcn_low16=%u ple_empty=%08x\n",names[i],v[8],v[9],v[10],v[10]&0xffff,v[11]);
++    }
++    mutex_unlock(&c->lock); return n;
++}
+ static ssize_t watch_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
+ {
+     struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n=0; unsigned i,j;
+@@ -366,16 +388,17 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU beacon TXD-format test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU beacon state/TSF test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
++static struct kobj_attribute state_attr=__ATTR_RO(state);
+ static struct kobj_attribute watch_attr=__ATTR_RO(watch);
+ static struct kobj_attribute beacon_attr=__ATTR_RO(beacon);
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -415,7 +438,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
