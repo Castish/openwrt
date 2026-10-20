@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+// Add a fixed4KiB external initramfs to the unchanged C80 RAM31 kernel.
+/dts-v1/;
+/plugin/;
+/ {
+    fragment@0 {
+        target-path = "/chosen";
+        __overlay__ {
+            linux,initrd-start = <0x40c00000>;
+            linux,initrd-end = <0x40c01000>;
+        };
+    };
+};

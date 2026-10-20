@@ -1,0 +1,1 @@
+/dts-v1/; /plugin/; / { fragment@0 { target-path="/chosen"; __overlay__ { bootargs="console=ttyAMA0,115200 rdinit=/init panic=0"; }; }; };

@@ -1,0 +1,75 @@
+{
+  "source_snapshot": "ssh-identity-v1",
+  "files": [
+    {
+      "file": "AUTH-LICENSE",
+      "bytes": 1082,
+      "original_source_sha256": "5ea99049fe36140d37cd53389b7d8d1eb6781d96fd2486f2906d50aa29758776"
+    },
+    {
+      "file": "GPL-2.0",
+      "bytes": 18729,
+      "original_source_sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79"
+    },
+    {
+      "file": "LICENSES.md",
+      "bytes": 1931,
+      "original_source_sha256": "57917a9d70224b46d2f692996ace316cfdec0a289592b7d98f7f50f8eae9121a"
+    },
+    {
+      "file": "Linux-syscall-note",
+      "bytes": 1258,
+      "original_source_sha256": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f"
+    },
+    {
+      "file": "auth-initrd.dtso",
+      "bytes": 314,
+      "original_source_sha256": "e83bb9dea3de9e7acff384685a105401f9894898d5a3fb9359897c4c96cbbb26"
+    },
+    {
+      "file": "build.sh",
+      "bytes": 1954,
+      "original_source_sha256": "0a25e2b87bf4c73823755c3a48e08cd939c8e6f1ddd4ad3e4f6d495165d11956"
+    },
+    {
+      "file": "make-auth.py",
+      "bytes": 4586,
+      "original_source_sha256": "2ded87a37ef3df1544f59d84b8e023eb51193689740e869cf3f2842993448b26"
+    },
+    {
+      "file": "package.py",
+      "bytes": 3045,
+      "original_source_sha256": "b64fbe5d5ce0121f012f11f64d4bcee86675ab028a76c294c56cbcb967783a54"
+    },
+    {
+      "file": "parent-FIRMWARE-SOURCES.json",
+      "bytes": 1440,
+      "original_source_sha256": "04161cb0941cb77ffdafd8a8fa6a76a96138e064fd23b362a4a91a98f19b846a"
+    },
+    {
+      "file": "parent-openwrt-packages.json",
+      "bytes": 11184,
+      "original_source_sha256": "619a33c722b984f21e1dd22714867c491ed1d714119504b0d14938170a18f617"
+    },
+    {
+      "file": "qemu-bootargs.dtso",
+      "bytes": 139,
+      "original_source_sha256": "380e068ecf3b8761906e63d487ec5a2f832cbb132e4905f52b0d4002ad5cffad"
+    },
+    {
+      "file": "run-qemu-auth.sh",
+      "bytes": 1022,
+      "original_source_sha256": "d4c6bc4bb1c920aee43ed3f68c59373b180c4a8ef2a63ce06f7f21a1ddf53a8c"
+    },
+    {
+      "file": "verify-auth.py",
+      "bytes": 6251,
+      "original_source_sha256": "b46939d1adba01cb9c36e98fc2584c15d426ed3c23da81aed9f05b85acbdac7f"
+    },
+    {
+      "file": "verify-scope.py",
+      "bytes": 6448,
+      "original_source_sha256": "a8b5698ff6ac04883aa8bf98d23e626c03380620000f3f8f3fd63b3b050aaf38"
+    }
+  ]
+}
