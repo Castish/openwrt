@@ -1,0 +1,30 @@
+{
+  "source_snapshot": "switch-mdio-probe-v2",
+  "files": [
+    {
+      "file": "build.sh",
+      "bytes": 853,
+      "original_source_sha256": "ca5dc1e336b71a2069072e2ba608893c2663905d2fa9870c803cfbdf93ac211c"
+    },
+    {
+      "file": "c80-switch-cpu-probe-v2.S",
+      "bytes": 11744,
+      "original_source_sha256": "89046085cdc91521131506d1f023bdd098263f3b0ff27886706628e7e9f31f05"
+    },
+    {
+      "file": "probe.ld",
+      "bytes": 385,
+      "original_source_sha256": "cf74501d2bf211020140eb6504981670d88a4512ec6d07475d5b8dbd7cb9b523"
+    },
+    {
+      "file": "uart-print.S",
+      "bytes": 1206,
+      "original_source_sha256": "7aeb7a7b170fa347877ae0d3c6422e981cb2ea09316d48d7b76894d53bb869e2"
+    },
+    {
+      "file": "verify-binary.py",
+      "bytes": 18550,
+      "original_source_sha256": "1e3295780a5b21b25d8491a293eee96d0b76b5f9a94ce0a6b17cc2237c27ee75"
+    }
+  ]
+}
