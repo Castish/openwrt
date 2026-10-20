@@ -1,0 +1,30 @@
+{
+  "source_snapshot": "cloud-host-setup",
+  "files": [
+    {
+      "file": "install.sh",
+      "bytes": 13379,
+      "original_source_sha256": "acbb847fec522bacccb8eadc315817b92343738c002a4d3e589becb8156fb584"
+    },
+    {
+      "file": "activate.sh",
+      "bytes": 2011,
+      "original_source_sha256": "9e40be67fd5fc30ee06038ecee875d2f8972dfe4ada0dc6561ce0496de6b1e36"
+    },
+    {
+      "file": "verify-host.sh",
+      "bytes": 5400,
+      "original_source_sha256": "4364bc790d9e494226bb5f435ce4846695fa3084315ca0fb91906f21f9f88b57"
+    },
+    {
+      "file": "packages.txt",
+      "bytes": 1443,
+      "original_source_sha256": "f0adfd8cd2a472d9affbc3f93b9df4cec35fddb8e62272277affa93742994bfa"
+    },
+    {
+      "file": "package-archives.sha256",
+      "bytes": 5019,
+      "original_source_sha256": "a2ad8fad109b0aca575e1413bf4e29f68e91f03986870999e55f481953707958"
+    }
+  ]
+}

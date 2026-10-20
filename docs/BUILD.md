@@ -62,3 +62,13 @@ SSH-конфигурация генерируется индивидуально
 `ssh-identity-v1/make-auth.py` генерирует новые ключи для каждой новой
 конфигурации и сохраняет уже созданные при повторной сборке. Пароль шаблона
 для тестовой RAM-системы — openwrt; персональные key/shadow-файлы сюда не входят.
+
+## Архив подготовки среды
+
+[cloud-host-setup](../research/cloud-host-setup/) сохраняет install/activate/verify
+и список Debian-пакетов исходной облачной среды. Скрипт install.sh готовит
+только host tools в /workspace/.openwrt-onboarding, не клонирует OpenWrt и не
+меняет checkout. Дополнительные cross-toolchain/QEMU/Unicorn зависимости
+поздних этапов задаются соответствующими исследовательскими скриптами.
+[inspect-firmware.py](../research/wifi-bringup/inspect-firmware.py) описывает
+структуру локально предоставленного OEM Wi-Fi образа без его распространения.

@@ -323,6 +323,18 @@
       "source_files": 14,
       "source_bytes": 59383,
       "snapshot_path": "research/ssh-identity-v1"
+    },
+    {
+      "stage": "cloud-host-setup",
+      "source_files": 5,
+      "source_bytes": 27252,
+      "snapshot_path": "research/cloud-host-setup"
+    },
+    {
+      "stage": "wifi-bringup",
+      "source_files": 1,
+      "source_bytes": 2546,
+      "snapshot_path": "research/wifi-bringup"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

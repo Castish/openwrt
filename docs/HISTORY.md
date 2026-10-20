@@ -59,6 +59,9 @@
 | [uboot-native-netboot-v1](../research/uboot-native-netboot-v1/) | Реальная модификация нормального U-Boot; AutoTFTP и LAN1 SSH подтверждены | 19 |
 | [ssh-identity-v1](../research/ssh-identity-v1/) | Шаблон индивидуальной постоянной SSH-конфигурации; работа подтверждена владельцем | 14 |
 
+| [cloud-host-setup](../research/cloud-host-setup/) | Исходные скрипты и версии пакетов подготовки облачной среды | 5 |
+| [wifi-bringup](../research/wifi-bringup/) | Статический анализ формата трёхрегионной Wi-Fi firmware | 1 |
+
 ## Подтверждённый рубеж RAM31
 
 Одно открытое подключение клиента:5126 парных завершений TX,5110 reuse payload,40 оборотов кольца, полный оборот4080 data token IDs. Ошибок ownership/stale/duplicate/early-token не зафиксировано. Штатная остановка: result/cleanup/critical=0; DMA idle и MCU stopped подтверждены; память остаётся закреплена до reboot.

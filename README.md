@@ -20,7 +20,7 @@ hostapd в RAM32; затем жизненный цикл клиента и WPA2.
 - [История этапов и результаты](docs/HISTORY.md)
 - [Структура и сборка](docs/BUILD.md)
 - [Состав публикации и приватные файлы](docs/PUBLICATION.md)
-- [Каталог54 исходных снимков](docs/source-catalog.json)
+- [Каталог56 исходных снимков](docs/source-catalog.json)
 - [Исходники последней проверенной RAM31](research/openwrt-ram31-scheduler/)
 - [Модификация U-Boot](research/uboot-native-netboot-v1/)
 - [Шаблон постоянной конфигурации SSH](research/ssh-identity-v1/)

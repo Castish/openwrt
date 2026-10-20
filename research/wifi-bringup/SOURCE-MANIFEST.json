@@ -1,0 +1,10 @@
+{
+  "source_snapshot": "wifi-bringup",
+  "files": [
+    {
+      "file": "inspect-firmware.py",
+      "bytes": 2546,
+      "original_source_sha256": "663d56a43fcf06c01e739a242b74ff2da454c92ebed4cc47283013fac37c0e24"
+    }
+  ]
+}
