@@ -1,0 +1,329 @@
+{
+  "source_snapshots": [
+    {
+      "stage": "ram-probe",
+      "source_files": 4,
+      "source_bytes": 5769,
+      "snapshot_path": "research/ram-probe"
+    },
+    {
+      "stage": "readonly-diag",
+      "source_files": 5,
+      "source_bytes": 12137,
+      "snapshot_path": "research/readonly-diag"
+    },
+    {
+      "stage": "linux-bringup",
+      "source_files": 12,
+      "source_bytes": 39261,
+      "snapshot_path": "research/linux-bringup"
+    },
+    {
+      "stage": "linux-flash-backup",
+      "source_files": 14,
+      "source_bytes": 54218,
+      "snapshot_path": "research/linux-flash-backup"
+    },
+    {
+      "stage": "linux-ethernet-ram3",
+      "source_files": 19,
+      "source_bytes": 109754,
+      "snapshot_path": "research/linux-ethernet-ram3"
+    },
+    {
+      "stage": "ethernet-irq-probe",
+      "source_files": 5,
+      "source_bytes": 21635,
+      "snapshot_path": "research/ethernet-irq-probe"
+    },
+    {
+      "stage": "ethernet-irq-probe-v2",
+      "source_files": 6,
+      "source_bytes": 30698,
+      "snapshot_path": "research/ethernet-irq-probe-v2"
+    },
+    {
+      "stage": "linux-ethernet-ram4",
+      "source_files": 20,
+      "source_bytes": 136642,
+      "snapshot_path": "research/linux-ethernet-ram4"
+    },
+    {
+      "stage": "switch-mdio-probe",
+      "source_files": 6,
+      "source_bytes": 29331,
+      "snapshot_path": "research/switch-mdio-probe"
+    },
+    {
+      "stage": "switch-mdio-probe-v2",
+      "source_files": 5,
+      "source_bytes": 32738,
+      "snapshot_path": "research/switch-mdio-probe-v2"
+    },
+    {
+      "stage": "linux-ethernet-ram5",
+      "source_files": 26,
+      "source_bytes": 184862,
+      "snapshot_path": "research/linux-ethernet-ram5"
+    },
+    {
+      "stage": "linux-ethernet-ram6",
+      "source_files": 26,
+      "source_bytes": 212894,
+      "snapshot_path": "research/linux-ethernet-ram6"
+    },
+    {
+      "stage": "linux-ethernet-ram7",
+      "source_files": 32,
+      "source_bytes": 319241,
+      "snapshot_path": "research/linux-ethernet-ram7"
+    },
+    {
+      "stage": "linux-ethernet-ram8",
+      "source_files": 33,
+      "source_bytes": 325254,
+      "snapshot_path": "research/linux-ethernet-ram8"
+    },
+    {
+      "stage": "linux-ethernet-ram9",
+      "source_files": 33,
+      "source_bytes": 329589,
+      "snapshot_path": "research/linux-ethernet-ram9"
+    },
+    {
+      "stage": "openwrt-wifi-emi",
+      "source_files": 13,
+      "source_bytes": 59399,
+      "snapshot_path": "research/openwrt-wifi-emi"
+    },
+    {
+      "stage": "connsys-id-probe",
+      "source_files": 7,
+      "source_bytes": 24051,
+      "snapshot_path": "research/connsys-id-probe"
+    },
+    {
+      "stage": "connsys-bootstrap",
+      "source_files": 12,
+      "source_bytes": 53708,
+      "snapshot_path": "research/connsys-bootstrap"
+    },
+    {
+      "stage": "connsys-hif-probe",
+      "source_files": 12,
+      "source_bytes": 59994,
+      "snapshot_path": "research/connsys-hif-probe"
+    },
+    {
+      "stage": "uboot-script-runner",
+      "source_files": 10,
+      "source_bytes": 38639,
+      "snapshot_path": "research/uboot-script-runner"
+    },
+    {
+      "stage": "openwrt-ram1",
+      "source_files": 30,
+      "source_bytes": 245310,
+      "snapshot_path": "research/openwrt-ram1"
+    },
+    {
+      "stage": "openwrt-ram2-mcu",
+      "source_files": 37,
+      "source_bytes": 333860,
+      "snapshot_path": "research/openwrt-ram2-mcu"
+    },
+    {
+      "stage": "openwrt-ram3-mcu",
+      "source_files": 37,
+      "source_bytes": 278106,
+      "snapshot_path": "research/openwrt-ram3-mcu"
+    },
+    {
+      "stage": "openwrt-ram4-patch",
+      "source_files": 38,
+      "source_bytes": 320099,
+      "snapshot_path": "research/openwrt-ram4-patch"
+    },
+    {
+      "stage": "openwrt-ram5-main",
+      "source_files": 39,
+      "source_bytes": 335864,
+      "snapshot_path": "research/openwrt-ram5-main"
+    },
+    {
+      "stage": "openwrt-ram6-fwdl",
+      "source_files": 41,
+      "source_bytes": 349760,
+      "snapshot_path": "research/openwrt-ram6-fwdl"
+    },
+    {
+      "stage": "openwrt-ram7-query",
+      "source_files": 42,
+      "source_bytes": 372152,
+      "snapshot_path": "research/openwrt-ram7-query"
+    },
+    {
+      "stage": "openwrt-ram8-irq",
+      "source_files": 45,
+      "source_bytes": 412646,
+      "snapshot_path": "research/openwrt-ram8-irq"
+    },
+    {
+      "stage": "openwrt-ram9-nvm",
+      "source_files": 48,
+      "source_bytes": 444191,
+      "snapshot_path": "research/openwrt-ram9-nvm"
+    },
+    {
+      "stage": "openwrt-ram10-nvm-wait",
+      "source_files": 44,
+      "source_bytes": 421373,
+      "snapshot_path": "research/openwrt-ram10-nvm-wait"
+    },
+    {
+      "stage": "openwrt-ram11-nvm-pad",
+      "source_files": 44,
+      "source_bytes": 418954,
+      "snapshot_path": "research/openwrt-ram11-nvm-pad"
+    },
+    {
+      "stage": "openwrt-ram12-devinfo",
+      "source_files": 45,
+      "source_bytes": 445458,
+      "snapshot_path": "research/openwrt-ram12-devinfo"
+    },
+    {
+      "stage": "openwrt-ram13-devinfo-var",
+      "source_files": 45,
+      "source_bytes": 452790,
+      "snapshot_path": "research/openwrt-ram13-devinfo-var"
+    },
+    {
+      "stage": "openwrt-ram14-bss",
+      "source_files": 46,
+      "source_bytes": 477047,
+      "snapshot_path": "research/openwrt-ram14-bss"
+    },
+    {
+      "stage": "openwrt-ram15-radio",
+      "source_files": 46,
+      "source_bytes": 512351,
+      "snapshot_path": "research/openwrt-ram15-radio"
+    },
+    {
+      "stage": "openwrt-ram16-beacon",
+      "source_files": 47,
+      "source_bytes": 543439,
+      "snapshot_path": "research/openwrt-ram16-beacon"
+    },
+    {
+      "stage": "openwrt-ram17-watch",
+      "source_files": 47,
+      "source_bytes": 548840,
+      "snapshot_path": "research/openwrt-ram17-watch"
+    },
+    {
+      "stage": "openwrt-ram18-rx",
+      "source_files": 50,
+      "source_bytes": 568479,
+      "snapshot_path": "research/openwrt-ram18-rx"
+    },
+    {
+      "stage": "openwrt-ram19-txd",
+      "source_files": 51,
+      "source_bytes": 570463,
+      "snapshot_path": "research/openwrt-ram19-txd"
+    },
+    {
+      "stage": "openwrt-ram20-state",
+      "source_files": 54,
+      "source_bytes": 610720,
+      "snapshot_path": "research/openwrt-ram20-state"
+    },
+    {
+      "stage": "openwrt-ram21-period",
+      "source_files": 55,
+      "source_bytes": 611356,
+      "snapshot_path": "research/openwrt-ram21-period"
+    },
+    {
+      "stage": "openwrt-ram22-client-rx",
+      "source_files": 57,
+      "source_bytes": 680153,
+      "snapshot_path": "research/openwrt-ram22-client-rx"
+    },
+    {
+      "stage": "openwrt-ram23-auth-tx",
+      "source_files": 61,
+      "source_bytes": 711751,
+      "snapshot_path": "research/openwrt-ram23-auth-tx"
+    },
+    {
+      "stage": "openwrt-ram24-tx-free",
+      "source_files": 65,
+      "source_bytes": 731014,
+      "snapshot_path": "research/openwrt-ram24-tx-free"
+    },
+    {
+      "stage": "openwrt-ram25-assoc",
+      "source_files": 69,
+      "source_bytes": 807241,
+      "snapshot_path": "research/openwrt-ram25-assoc"
+    },
+    {
+      "stage": "openwrt-ram26-echo",
+      "source_files": 73,
+      "source_bytes": 853418,
+      "snapshot_path": "research/openwrt-ram26-echo"
+    },
+    {
+      "stage": "openwrt-ram27-window",
+      "source_files": 75,
+      "source_bytes": 855826,
+      "snapshot_path": "research/openwrt-ram27-window"
+    },
+    {
+      "stage": "openwrt-ram28-netdev",
+      "source_files": 87,
+      "source_bytes": 963948,
+      "snapshot_path": "research/openwrt-ram28-netdev"
+    },
+    {
+      "stage": "openwrt-ram29-recycle",
+      "source_files": 95,
+      "source_bytes": 1042144,
+      "snapshot_path": "research/openwrt-ram29-recycle"
+    },
+    {
+      "stage": "openwrt-ram30-ring128",
+      "source_files": 95,
+      "source_bytes": 987514,
+      "snapshot_path": "research/openwrt-ram30-ring128"
+    },
+    {
+      "stage": "openwrt-ram31-scheduler",
+      "source_files": 98,
+      "source_bytes": 1021332,
+      "snapshot_path": "research/openwrt-ram31-scheduler"
+    },
+    {
+      "stage": "uboot-autoboot-v1",
+      "source_files": 13,
+      "source_bytes": 40201,
+      "snapshot_path": "research/uboot-autoboot-v1"
+    },
+    {
+      "stage": "uboot-native-netboot-v1",
+      "source_files": 19,
+      "source_bytes": 67736,
+      "snapshot_path": "research/uboot-native-netboot-v1"
+    },
+    {
+      "stage": "ssh-identity-v1",
+      "source_files": 14,
+      "source_bytes": 59383,
+      "snapshot_path": "research/ssh-identity-v1"
+    }
+  ],
+  "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"
+}
