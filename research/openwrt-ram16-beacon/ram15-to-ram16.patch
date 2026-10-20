@@ -1,0 +1,265 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -1,5 +1,5 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+-/* Bounded MT7626 MCU/channel/MAC receive experiment. No data TX/flash commands.
++/* Bounded MT7626 MCU/channel/MAC/beacon experiment. No client-data/flash commands.
+  * Shared with the native fault model; OS supplies coherent DMA, uncached EMI,
+  * MMIO, monotonic time and barriers. Only little-endian ARM/x86 are supported.
+  */
+@@ -12,7 +12,7 @@
+ typedef unsigned char c80_u8;
+ typedef unsigned long long c80_u64;
+ #define C80_TX_N 128u
+-#define C80_COMMAND_SLOTS 21u
++#define C80_COMMAND_SLOTS 25u
+ #define C80_COMMAND_BYTES 1152u
+ #define C80_NVM_BYTES 1024u
+ #define C80_NVM_COPY_BYTES 960u
+@@ -45,6 +45,7 @@
+     c80_u8 fragment[C80_FRAGMENT_SLOTS][1024];
+     c80_u8 data[2][C80_RX_N][C80_RX_SIZE];
+     c80_u8 nvm_payload[4+C80_NVM_BYTES]; /* Not a standalone DMA packet. */
++    c80_u8 beacon_body[528]; /* CPU scratch only, copied to unique TX slot. */
+ };
+ struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
+ struct c80_result;
+@@ -64,6 +65,7 @@
+     c80_u32 devinfo_test; /* Linux enables the bounded ON/OFF experiment. */
+     c80_u32 bss_test; /* OWN/BASIC context lifecycle between DEVINFO ON/OFF. */
+     c80_u32 radio_test; /* One channel, bounded MAC ON/listen/OFF lifecycle. */
++    c80_u32 beacon_test; /* Bounded30s firmware beacon offload inside radio. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -80,6 +82,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -136,6 +139,11 @@
+     c80_u32 radio_rx_packets,radio_rx_bytes,radio_rx_types[8],radio_rx_bad;
+     c80_u32 radio_raw_frames,radio_beacon_headers,radio_rx_translated,radio_rx_full;
+     c80_u32 radio_first_dw0,radio_first_dw1,radio_first_valid;
++    c80_u32 beacon_attempted[4],beacon_valid[4],beacon_status[4],beacon_ext[4],beacon_echo[4];
++    c80_u32 beacon_index[4],beacon_count[4],beacon_base_read[4],beacon_event_bytes[4],beacon_dma_bytes[4],beacon_tail_bytes[4];
++    c80_u32 beacon_wait_us[4],beacon_polls[4],beacon_complete;
++    c80_u32 beacon_window_started,beacon_window_us,beacon_window_polls;
++
+ 
+ };
+ #define C80_CLEANUP_CONTROL 1u
+@@ -324,6 +332,25 @@
+             ++r->rx_ignored; continue;
+         }
+         if(event==0xed) {
++            if(r->phase>=33 && r->phase<=36) {
++                c80_u32 k=r->phase-33,sync=k==0 || k==3,ext=sync?0x26:0x49;
++                if(p[24]!=0 && p[24]!=ext) { ++r->rx_ignored; continue; }
++                r->beacon_ext[k]=p[24]; r->beacon_event_bytes[k]=r->last_event_len;
++                r->beacon_dma_bytes[k]=size;
++                /* Sync flags27 minimum16;offload flags0f expectedffff ignores
++                 * OEMlengthcheck. Host requires8B base and full DMA bounds. */
++                if(r->last_event_len<(sync?28u:20u) || size<(sync?44u:36u))
++                    return C80_BEACON_BAD_REPLY;
++                r->beacon_base_read[k]=1; r->beacon_tail_bytes[k]=r->last_event_len-(sync?28:20);
++                r->beacon_echo[k]=p[28]; r->beacon_status[k]=c80_get32(p+32);
++                if(r->beacon_echo[k]!=ext) return C80_BEACON_BAD_REPLY;
++                if(sync) {
++                    r->beacon_index[k]=p[36]; r->beacon_count[k]=c80_get16(p+38);
++                    if(!r->beacon_status[k] && (r->beacon_index[k] || r->beacon_count[k]!=1))
++                        return C80_BEACON_BAD_REPLY;
++                }
++                r->beacon_valid[k]=1; *status=r->beacon_status[k]; return 0;
++            }
+             if((r->phase>=27 && r->phase<=30) || r->phase==32) {
+                 c80_u32 step=c80_radio_index(r->phase),ext=c80_radio_ext[step];
+                 if(p[24]!=0 && p[24]!=ext) { ++r->rx_ignored; continue; }
+@@ -483,6 +510,8 @@
+     } else if((r->phase>=27 && r->phase<=30) || r->phase==32) {
+         c80_u32 step=c80_radio_index(r->phase);
+         r->radio_wait_us[step]=elapsed; r->radio_polls[step]=polls;
++    } else if(r->phase>=33 && r->phase<=36) {
++        r->beacon_wait_us[r->phase-33]=elapsed; r->beacon_polls[r->phase-33]=polls;
+     }
+ }
+ static c80_u32 c80_exchange(struct c80_io *io,struct c80_result *r,c80_u32 cid,
+@@ -492,13 +521,14 @@
+     c80_u32 nvm=cid==0xed && (r->phase==21 || r->phase==22);
+     c80_u32 devinfo=cid==0xed && r->phase>=23 && r->phase<=26;
+     c80_u32 radio=cid==0xed && ((r->phase>=27 && r->phase<=30) || r->phase==32);
+-    c80_u32 timeout=nvm?C80_NVM_WAIT_US:radio?(r->phase==28?5000000u:6000000u):devinfo?C80_DEVINFO_WAIT_US:2000000u;
+-    c80_u32 poll_us=(nvm || devinfo || radio)?C80_NVM_POLL_US:50u;
+-    c80_u32 max_polls=(nvm || devinfo || radio)?timeout/poll_us:C80_MAX_POLLS;
++    c80_u32 beacon=cid==0xed && r->phase>=33 && r->phase<=36;
++    c80_u32 timeout=nvm?C80_NVM_WAIT_US:beacon?6000000u:radio?(r->phase==28?5000000u:6000000u):devinfo?C80_DEVINFO_WAIT_US:2000000u;
++    c80_u32 poll_us=(nvm || devinfo || radio || beacon)?C80_NVM_POLL_US:50u;
++    c80_u32 max_polls=(nvm || devinfo || radio || beacon)?timeout/poll_us:C80_MAX_POLLS;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_COMMAND_SLOTS || bytes>C80_COMMAND_BYTES-64 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+     if(cid==0xed) {
+-        if(!r->main_ready || r->phase<20 || r->phase>32) return C80_QUERY_BAD;
++        if(!r->main_ready || r->phase<20 || r->phase>36) return C80_QUERY_BAD;
+         if(c80_read(io,C80_GLO)==0xffffffffu || (c80_read(io,C80_GLO)&C80_DOWNLOAD_MODE))
+             return C80_MODE_REFUSED;
+     } else if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+@@ -514,6 +544,11 @@
+     if(radio) {
+         io->pool->command[slot][38]=1;
+         io->pool->command[slot][41]=c80_radio_ext[c80_radio_index(r->phase)];
++    }
++    if(beacon) {
++        c80_u32 k=r->phase-33,sync=k==0 || k==3;
++        io->pool->command[slot][38]=sync?0:1;
++        io->pool->command[slot][41]=sync?0x26:0x49;
+     }
+     d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+@@ -525,7 +560,7 @@
+         /* NVM follows OEM60s, DEVINFO the OEM6s default. A second iteration
+          * cap also bounds a frozen clock; rollback fails without unsigned
+          * wrap. No command is retried or resent while waiting. */
+-        if(nvm || devinfo || radio) {
++        if(nvm || devinfo || radio || beacon) {
+             now=io->time_us(io->context);
+             if(now<start || now-start>=timeout) break;
+         }
+@@ -757,6 +792,54 @@
+     if(!any || all==255 || (mac[0]&1)) return C80_DEVINFO_BAD_MAC;
+     r->devinfo_mac_valid=1; return 0;
+ }
++/* Exact OEM4031a734->403199fc 32B TXD for band0/OwnMac0/WCID0,
++ * CCK1Mbps/20MHz/noACK beacon. Frame fields are standard802.11; MACs from
++ * validated ROMNVM only. No template/SSID/client configuration API added. */
++static c80_u32 c80_beacon_roundtrip(struct c80_io *io,struct c80_result *r)
++{
++    static const c80_u8 txd[32]={0x5e,0x00,0x00,0x48,0x00,0xcc,0x00,0x00,0x00,0x04,0x00,0xa0,0x01,0xf8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x08,0x00};
++    static const c80_u8 frame[62]={0x80,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x64,0x00,0x01,0x00,0x00,0x09,0x43,0x38,0x30,0x2d,0x52,0x41,0x4d,0x31,0x36,0x01,0x04,0x82,0x84,0x8b,0x96,0x03,0x01,0x06,0x05,0x04,0x00,0x01,0x00,0x00};
++    c80_u8 *body=io->pool->beacon_body; c80_u32 k,i,n,rc,status=~0u,polls;
++    c80_u64 start,now;
++    if(!r->nvm_equal || !r->devinfo_valid[0] || r->devinfo_status[0] ||
++       !r->bss_valid[0] || r->bss_status[0]) return C80_BEACON_BAD_STATE;
++    for(i=0;i<4;++i) if(!r->radio_valid[i] || r->radio_status[i]) return C80_BEACON_BAD_STATE;
++    for(k=0;k<4;++k) {
++        for(i=0;i<528;++i) body[i]=0;
++        if(k==0 || k==3) {
++            c80_put16(body+2,1); body[4]=1; c80_put16(body+8,9); c80_put16(body+10,16);
++            if(k==0) { c80_put16(body+12,100); body[14]=1; body[15]=1; }
++            n=24;
++        } else {
++            body[1]=k==1; c80_put16(body+8,94); c80_put16(body+10,88);
++            for(i=0;i<32;++i) body[12+i]=txd[i];
++            for(i=0;i<62;++i) body[44+i]=frame[i];
++            for(i=0;i<6;++i) body[54+i]=body[60+i]=io->pool->nvm_payload[8+i];
++            n=528;
++        }
++        c80_stage(io,r,33+k); r->beacon_attempted[k]=1;
++        rc=c80_exchange(io,r,0xed,body,n,&status);
++        if(rc) return rc;
++        if(!r->beacon_valid[k] || status) return C80_BEACON_REJECTED;
++        if(k==1) {
++            c80_stage(io,r,37); r->beacon_window_started=1;
++            start=io->time_us(io->context);
++            for(polls=0;polls<30000;++polls) {
++                now=io->time_us(io->context);
++                if(now<start) return C80_BAD_TIMER;
++                if(now-start>=30000000) break;
++                rc=c80_receive(io,r,0,0,&status);
++                if(rc!=C80_RX_TIMEOUT) return rc?rc:C80_BEACON_BAD_REPLY;
++                io->delay_us(io->context,1000);
++            }
++            now=io->time_us(io->context); if(now<start) return C80_BAD_TIMER;
++            r->beacon_window_us=now-start>0xffffffffu?0xffffffffu:(c80_u32)(now-start);
++            r->beacon_window_polls=polls;
++            if(r->beacon_window_us<30000000) return C80_BAD_TIMER;
++        }
++    }
++    r->beacon_complete=1; return 0;
++}
+ /* Five packets proven against OEM builders: MAC OFF,channel6 HT20,
+  * 1x1 path,MAC ON,MAC OFF. Keep BSS/device contexts alive until completed.
+  * No beacon/sync/STA-record/data TX or radio05 command. */
+@@ -780,7 +863,10 @@
+         rc=c80_exchange(io,r,0xed,body,bytes,&status);
+         if(rc) return rc;
+         if(!r->radio_valid[step] || status) return C80_RADIO_REJECTED;
+-        if(step==3) {
++        if(step==3 && io->beacon_test) {
++            rc=c80_beacon_roundtrip(io,r);
++            if(rc) return rc;
++        } else if(step==3) {
+             c80_stage(io,r,31); r->radio_listen_started=1;
+             start=io->time_us(io->context);
+             for(polls=0;polls<500;++polls) {
+@@ -933,6 +1019,9 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->beacon_test && (!io->radio_test || !io->devinfo_test || !io->bss_test)) {
++        r->primary=C80_BEACON_BAD_STATE; return r->primary;
++    }
+     if(io->radio_test && (!io->devinfo_test || !io->bss_test)) {
+         r->primary=C80_RADIO_BAD_STATE; return r->primary;
+     }
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -92,6 +92,7 @@
+ {
+     struct c80_linux *c=context;
+     dev_info(c->dev,"MCU transport stage%u\n",stage);
++    if(stage==37) dev_info(c->dev,"Beacon test window30s; check Wi-Fi list for C80-RAM16\n");
+     if(stage==21 || stage==22)
+         dev_info(c->dev,"NVM %s: waiting up to 60000 ms for MCU response\n",stage==21?"SET":"GET");
+ }
+@@ -290,6 +291,21 @@
+         r->radio_first_valid,r->radio_first_dw0,r->radio_first_dw1);
+     mutex_unlock(&c->lock); return n;
+ }
++static ssize_t beacon_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n=0; unsigned i;
++    static const char *const names[]={"sync_on","beacon_on","beacon_off","sync_off"};
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock); r=&c->result;
++    n+=sysfs_emit_at(buf,n,"complete=%u SSID=C80-RAM16 channel=6 width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=94 frame_bytes=62 TIM_pos=88 clients_supported=0\n",r->beacon_complete);
++    for(i=0;i<4;++i)
++        n+=sysfs_emit_at(buf,n,"%s attempted=%u valid=%u status=%08x ext=%02x echo=%02x index=%u count=%u event=%u dma=%u tail=%u base=%u wait_us=%u polls=%u\n",
++            names[i],r->beacon_attempted[i],r->beacon_valid[i],r->beacon_status[i],r->beacon_ext[i],r->beacon_echo[i],r->beacon_index[i],r->beacon_count[i],
++            r->beacon_event_bytes[i],r->beacon_dma_bytes[i],r->beacon_tail_bytes[i],r->beacon_base_read[i],r->beacon_wait_us[i],r->beacon_polls[i]);
++    n+=sysfs_emit_at(buf,n,"window_started=%u elapsed_us=%u polls=%u target_us=30000000 timestamp_and_FCS_HW_unverified=1 payload_logged=0\n",
++        r->beacon_window_started,r->beacon_window_us,r->beacon_window_polls);
++    mutex_unlock(&c->lock); return n;
++}
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+                           const char *buf,size_t count)
+ {
+@@ -328,14 +344,15 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU channel/MAC receive test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU beacon offload test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
++static struct kobj_attribute beacon_attr=__ATTR_RO(beacon);
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&status_attr.attr,&radio_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -375,7 +392,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
