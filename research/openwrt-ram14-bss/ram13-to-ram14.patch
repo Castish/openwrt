@@ -1,0 +1,203 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -12,7 +12,7 @@
+ typedef unsigned char c80_u8;
+ typedef unsigned long long c80_u64;
+ #define C80_TX_N 128u
+-#define C80_COMMAND_SLOTS 14u
++#define C80_COMMAND_SLOTS 16u
+ #define C80_COMMAND_BYTES 1152u
+ #define C80_NVM_BYTES 1024u
+ #define C80_NVM_COPY_BYTES 960u
+@@ -62,6 +62,7 @@
+     c80_u32 (*irq_disarm)(void *,struct c80_result *);
+     c80_u32 (*nvm_read)(void *,c80_u8 *,c80_u32,c80_u32 *);
+     c80_u32 devinfo_test; /* Linux enables the bounded ON/OFF experiment. */
++    c80_u32 bss_test; /* OWN/BASIC context lifecycle between DEVINFO ON/OFF. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -75,6 +76,7 @@
+     C80_QUERY_BAD=24,C80_IRQ_NOT_SEEN=25,C80_IRQ_BAD=26,
+     C80_NVM_BAD_SOURCE=27,C80_NVM_SET_REJECTED=28,C80_NVM_BAD_REPLY=29,C80_NVM_MISMATCH=30,
+     C80_DEVINFO_BAD_MAC=31,C80_DEVINFO_REJECTED=32,C80_DEVINFO_BAD_REPLY=33,
++    C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -121,6 +123,10 @@
+     c80_u32 devinfo_complete,devinfo_wait_us[2],devinfo_polls[2];
+     c80_u32 devinfo_event_bytes[2],devinfo_dma_bytes[2],devinfo_tail_bytes[2];
+     c80_u32 devinfo_base_read[2],devinfo_echo[2];
++    c80_u32 bss_attempted[2],bss_valid[2],bss_status[2],bss_ext[2];
++    c80_u32 bss_index[2],bss_count[2],bss_event_bytes[2],bss_dma_bytes[2];
++    c80_u32 bss_tail_bytes[2],bss_base_read[2],bss_echo[2],bss_wait_us[2],bss_polls[2];
++    c80_u32 bss_complete;
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -266,6 +272,24 @@
+             ++r->rx_ignored; continue;
+         }
+         if(event==0xed) {
++            if(r->phase==25 || r->phase==26) {
++                c80_u32 step=r->phase-25;
++                /* Actual BSS builder402ee440: ext26, flags0x27/minimum16B,
++                 * callback402eccdc status at body+4. Same bounded variable
++                 * envelope as DEVINFO; add strict echo/index/TLV-count. */
++                if(p[24]!=0 && p[24]!=0x26) { ++r->rx_ignored; continue; }
++                r->bss_ext[step]=p[24]; r->bss_event_bytes[step]=r->last_event_len;
++                r->bss_dma_bytes[step]=size;
++                if(size<44 || r->last_event_len<28) return C80_BSS_BAD_REPLY;
++                r->bss_base_read[step]=1; r->bss_tail_bytes[step]=r->last_event_len-28;
++                r->bss_echo[step]=p[28]; r->bss_status[step]=c80_get32(p+32);
++                r->bss_index[step]=p[36]; r->bss_count[step]=c80_get16(p+38);
++                if(r->bss_echo[step]!=0x26) return C80_BSS_BAD_REPLY;
++                if(!r->bss_status[step] &&
++                   (r->bss_index[step] || r->bss_count[step]!=(step?1u:2u)))
++                    return C80_BSS_BAD_REPLY;
++                r->bss_valid[step]=1; *status=r->bss_status[step]; return 0;
++            }
+             if(r->phase==23 || r->phase==24) {
+                 c80_u32 step=r->phase-23;
+                 /* OEM flags0x27 include variable-response bit0x20. Actual
+@@ -390,6 +414,9 @@
+     } else if(r->phase==23 || r->phase==24) {
+         r->devinfo_wait_us[r->phase-23]=elapsed;
+         r->devinfo_polls[r->phase-23]=polls;
++    } else if(r->phase==25 || r->phase==26) {
++        r->bss_wait_us[r->phase-25]=elapsed;
++        r->bss_polls[r->phase-25]=polls;
+     }
+ }
+ static c80_u32 c80_exchange(struct c80_io *io,struct c80_result *r,c80_u32 cid,
+@@ -397,14 +424,14 @@
+ {
+     c80_u32 slot=r->command_submitted,sequence=c80_next_sequence(r),i,rx=0,tx=0,rc,len;
+     c80_u32 nvm=cid==0xed && (r->phase==21 || r->phase==22);
+-    c80_u32 devinfo=cid==0xed && (r->phase==23 || r->phase==24);
++    c80_u32 devinfo=cid==0xed && r->phase>=23 && r->phase<=26;
+     c80_u32 timeout=nvm?C80_NVM_WAIT_US:devinfo?C80_DEVINFO_WAIT_US:2000000u;
+     c80_u32 poll_us=(nvm || devinfo)?C80_NVM_POLL_US:50u;
+     c80_u32 max_polls=(nvm || devinfo)?timeout/poll_us:C80_MAX_POLLS;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_COMMAND_SLOTS || bytes>C80_COMMAND_BYTES-64 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+     if(cid==0xed) {
+-        if(!r->main_ready || r->phase<20 || r->phase>24) return C80_QUERY_BAD;
++        if(!r->main_ready || r->phase<20 || r->phase>26) return C80_QUERY_BAD;
+         if(c80_read(io,C80_GLO)==0xffffffffu || (c80_read(io,C80_GLO)&C80_DOWNLOAD_MODE))
+             return C80_MODE_REFUSED;
+     } else if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+@@ -416,6 +443,7 @@
+     /* OEM flags0x27 encode query0 here, despite the mutating command name.
+      * Preserve the ARM-produced header; don't infer SetQuery from its name. */
+     if(cid==0xed && (r->phase==23 || r->phase==24)) io->pool->command[slot][41]=0x2a;
++    if(cid==0xed && (r->phase==25 || r->phase==26)) io->pool->command[slot][41]=0x26;
+     d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+     io->dma_order(io->context,1);
+@@ -658,12 +686,40 @@
+     if(!any || all==255 || (mac[0]&1)) return C80_DEVINFO_BAD_MAC;
+     r->devinfo_mac_valid=1; return 0;
+ }
++static c80_u32 c80_bss_roundtrip(struct c80_io *io,struct c80_result *r)
++{
++    c80_u8 body[52]; c80_u32 step,i,offset,bytes,rc,status=~0u;
++    if(!r->nvm_equal || !r->devinfo_valid[0] || r->devinfo_status[0])
++        return C80_BSS_BAD_STATE;
++    for(step=0;step<2;++step) {
++        for(i=0;i<sizeof(body);++i) body[i]=0;
++        c80_put16(body+2,step?1:2); body[4]=1; offset=8;
++        if(!step) {
++            /* OWN mapping tag0: hardwareBSS0/OwnMac0/Band0,
++             * CONNECTION_INFRA_AP=0x10002. Actual handler402eca04. */
++            c80_put16(body+offset,0); c80_put16(body+offset+2,16);
++            c80_put32(body+offset+8,0x10002); offset+=16;
++        }
++        /* BASIC tag1 from actual402ecb94 and dedicated AP helper4031d708:
++         * NETWORK_INFRA=0x10000,cipher1,BMC/WMM/PHY/beacon/DTIM0. No channel,
++         * sync,beacon-offload,STA-record or MAC TX/RX-enable TLV/command. */
++        c80_put16(body+offset,1); c80_put16(body+offset+2,28);
++        c80_put32(body+offset+4,0x10000); body[offset+8]=step==0;
++        for(i=0;i<6;++i) body[offset+12+i]=io->pool->nvm_payload[8+i];
++        body[offset+21]=1; bytes=offset+28;
++        c80_stage(io,r,25+step); r->bss_attempted[step]=1;
++        rc=c80_exchange(io,r,0xed,body,bytes,&status);
++        if(rc) return rc;
++        if(!r->bss_valid[step] || status) return C80_BSS_REJECTED;
++    }
++    r->bss_complete=1; return 0;
++}
+ static c80_u32 c80_devinfo_roundtrip(struct c80_io *io,struct c80_result *r)
+ {
+     c80_u8 body[20]={0}; c80_u32 i,step,rc,status=~0u;
+     if(!r->nvm_equal || !r->devinfo_mac_valid) return C80_DEVINFO_BAD_MAC;
+     /* OEM TPOS header byte1 is reserved/zero; band0 is in the active TLV.
+-     * One device context, OwnMac0, band0; no BSS, MAC TX/RX or RF commands. */
++     * One device context, OwnMac0, band0; no MAC TX/RX or RF commands. */
+     c80_put16(body+2,1); body[4]=1;
+     c80_put16(body+8,0); c80_put16(body+10,12);
+     for(i=0;i<6;++i) body[14+i]=io->pool->nvm_payload[8+i];
+@@ -672,6 +728,10 @@
+         rc=c80_exchange(io,r,0xed,body,sizeof(body),&status);
+         if(rc) return rc;
+         if(!r->devinfo_valid[step] || status) return C80_DEVINFO_REJECTED;
++        if(!step && io->bss_test) {
++            rc=c80_bss_roundtrip(io,r);
++            if(rc) return rc;
++        }
+     }
+     r->devinfo_complete=1; return 0;
+ }
+@@ -756,6 +816,9 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->bss_test && !io->devinfo_test) {
++        r->primary=C80_BSS_BAD_STATE; return C80_BSS_BAD_STATE;
++    }
+     for(i=0;i<6;++i) if(!fw[i].data || fw[i].bytes!=c80_blob_sizes[i] ||
+        c80_crc(fw[i].data,fw[i].bytes)!=c80_blob_crcs[i]) { r->primary=C80_BAD_FW; return C80_BAD_FW; }
+     start=io->time_us(io->context); io->delay_us(io->context,10);
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -203,6 +203,8 @@
+         "devinfo mac_valid=%u complete=%u on_attempted=%u valid=%u status=%08x ext=%02x own=%u count=%u wait_us=%u polls=%u\n"
+         "devinfo_off attempted=%u valid=%u status=%08x ext=%02x own=%u count=%u wait_us=%u polls=%u\n"
+         "devinfo_reply on_event=%u dma=%u tail=%u base_read=%u echo=%02x off_event=%u dma=%u tail=%u base_read=%u echo=%02x\n"
++        "bss_complete=%u on_attempted=%u valid=%u status=%08x ext=%02x index=%u count=%u echo=%02x event=%u dma=%u tail=%u base_read=%u wait_us=%u polls=%u\n"
++        "bss_off attempted=%u valid=%u status=%08x ext=%02x index=%u count=%u echo=%02x event=%u dma=%u tail=%u base_read=%u wait_us=%u polls=%u\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+         r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
+@@ -257,6 +259,12 @@
+         r->devinfo_base_read[0],r->devinfo_echo[0],
+         r->devinfo_event_bytes[1],r->devinfo_dma_bytes[1],r->devinfo_tail_bytes[1],
+         r->devinfo_base_read[1],r->devinfo_echo[1],
++        r->bss_complete,r->bss_attempted[0],r->bss_valid[0],r->bss_status[0],r->bss_ext[0],
++        r->bss_index[0],r->bss_count[0],r->bss_echo[0],r->bss_event_bytes[0],r->bss_dma_bytes[0],
++        r->bss_tail_bytes[0],r->bss_base_read[0],r->bss_wait_us[0],r->bss_polls[0],
++        r->bss_attempted[1],r->bss_valid[1],r->bss_status[1],r->bss_ext[1],
++        r->bss_index[1],r->bss_count[1],r->bss_echo[1],r->bss_event_bytes[1],r->bss_dma_bytes[1],
++        r->bss_tail_bytes[1],r->bss_base_read[1],r->bss_wait_us[1],r->bss_polls[1],
+         c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;
+ }
+@@ -298,7 +306,7 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU DEVINFO test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU BSS context test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+@@ -344,7 +352,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
