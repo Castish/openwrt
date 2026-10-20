@@ -1,0 +1,173 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -75,7 +75,8 @@
+     c80_u32 devinfo_test; /* Linux enables the bounded ON/OFF experiment. */
+     c80_u32 bss_test; /* OWN/BASIC context lifecycle between DEVINFO ON/OFF. */
+     c80_u32 radio_test; /* One channel, bounded MAC ON/listen/OFF lifecycle. */
+-    c80_u32 beacon_test; /* Bounded30s firmware beacon offload inside radio. */
++    c80_u32 beacon_test; /* Bounded firmware beacon offload inside radio. */
++    c80_u32 long_beacon_test; /* Linux opts into180s; CONTROL stays30s. */
+     c80_u32 watch_test; /* Compare idle radio vs beacon window; read-only HIF watch. */
+     c80_u32 rx0_rearm_test; /* Return completed RX0 buffers; bounded64-frame poll budget. */
+     c80_u32 beacon_state_test; /* Five stored MAC snapshots + two OEM TSF queries. */
+@@ -88,6 +89,10 @@
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
++/* Keep the legacy30s mode for regression fixtures; Linux explicitly opts
++ * into the180s client window. All client deadlines derive from this target. */
++static c80_u32 c80_beacon_target(const struct c80_io *io)
++{ return io->long_beacon_test?180000000u:30000000u; }
+ enum c80_failure {
+     C80_OK=0,C80_BAD_FW=1,C80_BAD_AON=2,C80_BAD_ID=3,C80_STALE=4,
+     C80_BAD_TIMER=5,C80_BOOT_CONTROL=6,C80_READY_TIMEOUT=7,C80_OWN_TIMEOUT=8,
+@@ -342,7 +347,7 @@
+     c80_u8 *f=io->pool->auth_frame,*h=io->pool->auth_header;c80_u32 i;
+     if(!io->auth_reply_test || r->phase!=37 || !r->auth_ring_programmed) return;
+     if(r->auth_captured) { ++r->auth_duplicate; return; }
+-    if(r->watch[1].elapsed_us>29000000) { ++r->auth_late; return; }
++    if(r->watch[1].elapsed_us>c80_beacon_target(io)-1000000u) { ++r->auth_late; return; }
+     if(!r->nvm_equal || !r->devinfo_mac_valid || !r->bss_valid[0] || r->bss_status[0] ||
+        !r->radio_valid[3] || r->radio_status[3] || !r->beacon_valid[1] || r->beacon_status[1]) return;
+     for(i=0;i<32;++i) f[i]=0;
+@@ -396,7 +401,7 @@
+        !c80_mac_equal(p+10,io->pool->auth_frame+4)) return;
+     if(r->assoc_captured) { ++r->assoc_duplicate;return; }
+     now=io->time_us(io->context);
+-    if(now<r->assoc_window_start_us || now-r->assoc_window_start_us>28000000) { ++r->assoc_late;return; }
++    if(now<r->assoc_window_start_us || now-r->assoc_window_start_us>c80_beacon_target(io)-2000000u) { ++r->assoc_late;return; }
+     if(!r->auth_ring_programmed || !r->nvm_equal || !r->devinfo_mac_valid || !r->bss_valid[0] || r->bss_status[0] ||
+        !r->radio_valid[3] || r->radio_status[3] || !r->beacon_valid[1] || r->beacon_status[1]) return;
+     r->assoc_request_cap=c80_get16(p+24);r->assoc_listen=c80_get16(p+26);
+@@ -528,7 +533,7 @@
+     } else { ++r->data_other;return; }
+     if(r->diag_captured[type]) { ++r->diag_duplicate[type];return; }
+     now=io->time_us(io->context);
+-    if(now<r->assoc_window_start_us || now-r->assoc_window_start_us>28000000) { ++r->data_late;return; }
++    if(now<r->assoc_window_start_us || now-r->assoc_window_start_us>c80_beacon_target(io)-2000000u) { ++r->data_late;return; }
+     c80_data_frame(io,r,type,payload,n);
+ }
+ 
+@@ -1089,14 +1094,14 @@
+     if(r->phase!=37 || !r->auth_ring_programmed || !r->auth_submitted || !r->auth_dma_done) return C80_ASSOC_BAD_PREREQ;
+     now=io->time_us(io->context);
+     if(now<r->assoc_window_start_us) return C80_BAD_TIMER;
+-    if(now-r->assoc_window_start_us>29000000) return C80_ASSOC_TIMEOUT;
++    if(now-r->assoc_window_start_us>c80_beacon_target(io)-1000000u) return C80_ASSOC_TIMEOUT;
+     if(!r->auth_token_returned) return 0;
+     if(!r->sta_attempted[0]) { rc=c80_sta_exchange(io,r,0);if(rc) return rc; }
+     if(!r->sta_valid[0] || r->sta_status[0]) return C80_ASSOC_BAD_PREREQ;
+     now=io->time_us(io->context);
+     if(!r->assoc_submitted) {
+         if(now<r->assoc_window_start_us) return C80_BAD_TIMER;
+-        if(now-r->assoc_window_start_us>29000000) return C80_ASSOC_TIMEOUT;
++        if(now-r->assoc_window_start_us>c80_beacon_target(io)-1000000u) return C80_ASSOC_TIMEOUT;
+         r->assoc_pre_base=c80_read(io,C80_AUTH_RING);r->assoc_pre_count=c80_read(io,C80_AUTH_RING+4);
+         if(r->assoc_pre_base!=c80_dma_address(io,io->pool->auth_tx) || r->assoc_pre_count!=C80_AUTH_N ||
+            c80_read(io,C80_AUTH_RING+8)!=1 || c80_read(io,C80_AUTH_RING+12)!=1 ||
+@@ -1130,7 +1135,7 @@
+         now=io->time_us(io->context);
+         if(now<r->assoc_window_start_us) return C80_BAD_TIMER;
+         if(!r->diag_submitted[k]) {
+-            if(now-r->assoc_window_start_us>29000000) return C80_DATA_TIMEOUT;
++            if(now-r->assoc_window_start_us>c80_beacon_target(io)-1000000u) return C80_DATA_TIMEOUT;
+             if(!r->assoc_token_returned) return 0;
+             if(r->diag_submitted[1-k] && !r->diag_token_returned[1-k]) return 0;
+             slot=2+r->diag_submissions;if(slot>3) return C80_DATA_BAD_DESC;
+@@ -1424,7 +1429,7 @@
+     c80_u64 start=io->time_us(io->context),now; c80_u32 i,rc,status=0,slot;
+     w->started=1;
+     if(index==1 && io->assoc_reply_test) r->assoc_window_start_us=start;
+-    for(i=0;i<=30000;++i) {
++    for(i=0;i<=(index?c80_beacon_target(io):30000000u)/1000u;++i) {
+         now=io->time_us(io->context);
+         if(now<start) return C80_BAD_TIMER;
+         w->elapsed_us=now-start>0xffffffffu?0xffffffffu:(c80_u32)(now-start);
+@@ -1441,7 +1446,7 @@
+         rc=c80_receive(io,r,0,0,&status);
+         if(rc!=C80_RX_TIMEOUT) return rc?rc:C80_BEACON_BAD_REPLY;
+         if(index==1) { rc=c80_auth_poll(io,r);if(rc) return rc;rc=c80_assoc_step(io,r);if(rc) return rc;rc=c80_data_step(io,r);if(rc) return rc; }
+-        if(w->elapsed_us>=30000000) {
++        if(w->elapsed_us>=(index?c80_beacon_target(io):30000000u)) {
+             if(index==1 && io->data_echo_test) {
+                 c80_u32 k;
+                 for(k=0;k<2;++k) if(r->diag_captured[k] && (!r->diag_submitted[k] || !r->diag_dma_done[k] || !r->diag_token_returned[k])) return C80_DATA_TIMEOUT;
+@@ -1451,7 +1456,7 @@
+                (!r->assoc_submitted || !r->assoc_dma_done || !r->assoc_token_returned)) return C80_ASSOC_TIMEOUT;
+             w->complete=1; return 0;
+         }
+-        if(i<30000) io->delay_us(io->context,1000);
++        if(i<(index?c80_beacon_target(io):30000000u)/1000u) io->delay_us(io->context,1000);
+     }
+     return C80_BAD_TIMER; /* iteration cap also bounds a frozen clock */
+ }
+@@ -1511,10 +1516,10 @@
+                 continue;
+             }
+             start=io->time_us(io->context);
+-            for(polls=0;polls<30000;++polls) {
++            for(polls=0;polls<c80_beacon_target(io)/1000u;++polls) {
+                 now=io->time_us(io->context);
+                 if(now<start) return C80_BAD_TIMER;
+-                if(now-start>=30000000) break;
++                if(now-start>=c80_beacon_target(io)) break;
+                 rc=c80_receive(io,r,0,0,&status);
+                 if(rc!=C80_RX_TIMEOUT) return rc?rc:C80_BEACON_BAD_REPLY;
+                 io->delay_us(io->context,1000);
+@@ -1522,7 +1527,7 @@
+             now=io->time_us(io->context); if(now<start) return C80_BAD_TIMER;
+             r->beacon_window_us=now-start>0xffffffffu?0xffffffffu:(c80_u32)(now-start);
+             r->beacon_window_polls=polls;
+-            if(r->beacon_window_us<30000000) return C80_BAD_TIMER;
++            if(r->beacon_window_us<c80_beacon_target(io)) return C80_BAD_TIMER;
+         }
+     }
+     r->beacon_complete=1; return 0;
+@@ -1715,6 +1720,7 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->long_beacon_test && (!io->beacon_test || !io->watch_test)) { r->primary=C80_STATE_BAD_PREREQ;return r->primary; }
+     if(io->data_echo_test && !io->assoc_reply_test) { r->primary=C80_DATA_BAD_PREREQ;return r->primary; }
+     if(io->assoc_reply_test && (!io->auth_reply_test || !io->rx1_packet_test)) { r->primary=C80_ASSOC_BAD_PREREQ;return r->primary; }
+     if(io->auth_reply_test && (!io->management_rx_test || !io->rx1_rearm_test || !io->bss_period_test || !io->beacon_state_test ||
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -93,7 +93,7 @@
+     struct c80_linux *c=context;
+     dev_info(c->dev,"MCU transport stage%u\n",stage);
+     if(stage==38) dev_info(c->dev,"Control window30s; beacon still disabled\n");
+-    if(stage==37) dev_info(c->dev,"Beacon test window30s; check Wi-Fi list for C80-RAM16\n");
++    if(stage==37) dev_info(c->dev,"Beacon test window180s (3 minutes); connect to C80-RAM16\n");
+     if(stage==21 || stage==22)
+         dev_info(c->dev,"NVM %s: waiting up to 60000 ms for MCU response\n",stage==21?"SET":"GET");
+ }
+@@ -307,8 +307,8 @@
+         n+=sysfs_emit_at(buf,n,"%s attempted=%u valid=%u status=%08x ext=%02x echo=%02x index=%u count=%u event=%u dma=%u tail=%u base=%u wait_us=%u polls=%u\n",
+             names[i],r->beacon_attempted[i],r->beacon_valid[i],r->beacon_status[i],r->beacon_ext[i],r->beacon_echo[i],r->beacon_index[i],r->beacon_count[i],
+             r->beacon_event_bytes[i],r->beacon_dma_bytes[i],r->beacon_tail_bytes[i],r->beacon_base_read[i],r->beacon_wait_us[i],r->beacon_polls[i]);
+-    n+=sysfs_emit_at(buf,n,"window_started=%u elapsed_us=%u polls=%u target_us=30000000 timestamp_and_FCS_HW_unverified=1 payload_logged=0\n",
+-        r->beacon_window_started,r->beacon_window_us,r->beacon_window_polls);
++    n+=sysfs_emit_at(buf,n,"window_started=%u elapsed_us=%u polls=%u target_us=%u timestamp_and_FCS_HW_unverified=1 payload_logged=0\n",
++        r->beacon_window_started,r->beacon_window_us,r->beacon_window_polls,c80_beacon_target(&c->io));
+     mutex_unlock(&c->lock); return n;
+ }
+ /* Emit only saved observations: reading sysfs never accesses MAC MMIO. */
+@@ -339,7 +339,7 @@
+     const struct c80_watch_window *w; const struct c80_hif_sample *s;
+     if(!c) return -ENODEV;
+     mutex_lock(&c->lock); r=&c->result;
+-    n+=sysfs_emit_at(buf,n,"watch=1 fault_phase=%u target_us=30000000 max_samples=30001 sample_delay_us=1000 reads_nonatomic=1 auto_reenable=0\n",r->watch_fault_phase);
++    n+=sysfs_emit_at(buf,n,"watch=1 fault_phase=%u control_target_us=30000000 beacon_target_us=%u control_max_samples=30001 beacon_max_samples=%u sample_delay_us=1000 reads_nonatomic=1 auto_reenable=0\n",r->watch_fault_phase,c80_beacon_target(&c->io),c80_beacon_target(&c->io)/1000u+1);
+     for(i=0;i<2;++i) {
+         w=&r->watch[i];
+         n+=sysfs_emit_at(buf,n,"%s started=%u complete=%u elapsed_us=%u samples=%u last_good_us=%u fault_bits=%02x\n",
+@@ -541,7 +541,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
