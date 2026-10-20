@@ -1,0 +1,31 @@
+{
+  "origin": "User-supplied official Archer C80(RU)_V1_240812.zip/minifs/fw/mtk; compared to installed TPOS image",
+  "files": [
+    {
+      "file": "rootfs/lib/firmware/c80/test_mcu.bin",
+      "bytes": 72096,
+      "sha256": "2ce6788836de35335d5f9cbb6fb86cc8676b788020141b414a25539a18aa429e",
+      "crc32": "2ede9294"
+    },
+    {
+      "file": "rootfs/lib/firmware/c80/test_wifi.bin",
+      "bytes": 169240,
+      "sha256": "b1dd35a7c544c162181222bf7770cba3cd225a406eba002181f72b1462b03141",
+      "crc32": "4e2c264c"
+    },
+    {
+      "file": "rootfs/lib/firmware/c80/WIFI_RAM_CODE_iemi.bin",
+      "bytes": 395008,
+      "sha256": "ecd3e7f678118016c5ca75aa767629fa98314d4602e40e88b7b9a7b79e75500d",
+      "crc32": "10efafc7"
+    },
+    {
+      "file": "rootfs/lib/firmware/c80/WIFI_RAM_CODE_demi.bin",
+      "bytes": 119036,
+      "sha256": "3845b7b77ce1fe4b3e0f1bb821c29a27c734e45b05ed902286aa52cce888fa34",
+      "crc32": "9d2bbb46"
+    }
+  ],
+  "OEM_licenses_unchanged": true,
+  "calibration_included": false
+}
