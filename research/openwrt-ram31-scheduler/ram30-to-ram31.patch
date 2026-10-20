@@ -1,0 +1,213 @@
+--- a/drivers/soc/mediatek/c80_mcu_transport.c
++++ b/drivers/soc/mediatek/c80_mcu_transport.c
+@@ -454,6 +454,18 @@
+     n+=sysfs_emit_at(buf,n,"HW_FCS_error_checked=1 independent_FCS=0 RF_ACK_confirmed=0 WLAN_netdev_DHCP_general_IP_stack=0 pool_pinned_until_reboot=1 packet_or_address_logged=0\n");
+     mutex_unlock(&c->lock);return n;
+ }
++static ssize_t scheduler_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_scheduler_result *s;ssize_t n;c80_u32 i;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock);s=&c->result.scheduler;
++    n=sysfs_emit(buf,"enabled=%u saved=%u applied=%u touched=%04x read_bad=%04x program_bad=%04x guard_bad=%04x restore_bad=%04x restored=%u restore_refused=%u active_valid=%u failure_valid=%u\n",
++        c->io.scheduler_test,s->saved,s->applied,s->touched,s->read_bad,s->program_bad,s->guard_bad,s->restore_bad,s->restored,s->restore_refused,s->active_valid,s->failure_valid);
++    n+=sysfs_emit_at(buf,n,"OEM_callback=40308c4c generic_QM=0 active_ring_cells=128 timeout_us=1000000\nregister before wanted programmed active failure after\n");
++    for(i=0;i<C80_SCHED_N;++i)
++        n+=sysfs_emit_at(buf,n,"%08x %08x %08x %08x %08x %08x %08x\n",c80_sched_regs[i],s->before[i],s->wanted[i],s->programmed[i],s->active[i],s->failure[i],s->after[i]);
++    mutex_unlock(&c->lock);return n;
++}
+ static ssize_t netdev_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
+ {
+     struct c80_linux *c=c80_live;struct c80_net_result *n;ssize_t len;
+@@ -528,6 +540,7 @@
+ }
+ static struct kobj_attribute stop_attr=__ATTR(stop,0200,NULL,stop_store);
+ static struct kobj_attribute netdev_attr=__ATTR_RO(netdev);
++static struct kobj_attribute scheduler_attr=__ATTR_RO(scheduler);
+ static struct kobj_attribute reply_attr=__ATTR_RO(reply);
+ static struct kobj_attribute data_attr=__ATTR_RO(data);
+ static struct kobj_attribute association_attr=__ATTR_RO(association);
+@@ -540,7 +553,7 @@
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&stop_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&stop_attr.attr,&scheduler_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -580,7 +593,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
+--- a/drivers/soc/mediatek/c80_mcu_core.h
++++ b/drivers/soc/mediatek/c80_mcu_core.h
+@@ -88,6 +88,7 @@
+     c80_u32 rx1_packet_test; /* Classify RX1 descriptors before MCU event parsing. */
+     c80_u32 netdev_test; /* Linux Ethernet packet adapter, one associated peer. */
+     c80_u32 net_recycle_test; /* Explicit paired-completion reuse; stop-controlled. */
++    c80_u32 scheduler_test; /* Exact MT7626 OEM generic-QM DMA scheduler. */
+     int (*net_prepare)(void *,const c80_u8 *);
+     void (*net_link)(void *,int);
+     int (*net_receive)(void *,const c80_u8 *,c80_u32);
+@@ -131,6 +132,7 @@
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+     C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,C80_RX1_NOTIFY_BAD=58,C80_ASSOC_BAD_PREREQ=59,C80_STA_BAD_REPLY=60,C80_STA_REJECTED=61,C80_ASSOC_PUBLISH=62,C80_ASSOC_TIMEOUT=63,C80_ASSOC_BAD_DESC=64,C80_DATA_BAD_PREREQ=65,C80_DATA_PUBLISH=66,C80_DATA_BAD_DESC=67,C80_DATA_TIMEOUT=68,
++    C80_SCHED_CONFIG=78,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -147,8 +149,16 @@
+     c80_u32 probe_eligible,probe_test_ssid,probe_wildcard,probe_other_ssid,probe_short_ssid;
+     c80_u32 auth_to_us,auth_open_request,auth_other,assoc_to_us,reassoc_to_us,deauth_to_us,disassoc_to_us;
+ };
++#define C80_SCHED_N 15u
++struct c80_scheduler_result {
++    c80_u32 saved,applied,touched,read_bad,program_bad,guard_bad,restore_bad;
++    c80_u32 active_valid,failure_valid,restored,restore_refused;
++    c80_u32 before[C80_SCHED_N],wanted[C80_SCHED_N],programmed[C80_SCHED_N];
++    c80_u32 active[C80_SCHED_N],failure[C80_SCHED_N],after[C80_SCHED_N];
++};
+ struct c80_result {
+     struct c80_net_result net;
++    struct c80_scheduler_result scheduler;
+     c80_u32 phase,primary,cleanup,critical,ready,own_before,own_last,own_sent;
+     c80_u32 glo_before,glo_after,mask_before,mask_after,source_after;
+     c80_u32 controls_before[3],controls_after[3],aon_before[10],aon_after[10];
+@@ -246,6 +256,7 @@
+ #define C80_CLEANUP_GLO 2u
+ #define C80_CLEANUP_MASK 4u
+ #define C80_CLEANUP_RING 8u
++#define C80_CLEANUP_SCHED 16u
+ static const c80_u32 c80_aon_regs[10]={0x10000220,0x10000228,0x10000230,
+     0x10000238,0x10000370,0x10006000,0x10006608,0x1000660c,0x10006610,C80_RESET};
+ static const c80_u32 c80_controls[3]={0x18002150,0x18001130,0x10210000};
+@@ -267,6 +278,77 @@
+ { io->write(io->context,reg,value); }
+ static void c80_stage(struct c80_io *io,struct c80_result *r,c80_u32 phase)
+ { r->phase=phase; if(io->stage) io->stage(io->context,phase); }
++/* Exact OEM40308c4c, selected by MT7626 chip ops+164; generic QM0/2.
++ * Skip group3, unlike the superficially similar upstream neighbor loop.
++ * No completion/index/ownership/efuse registers are in this configuration. */
++static const c80_u32 c80_sched_regs[C80_SCHED_N]={
++    0x1800601c,0x18006010,0x18006008,0x18006020,0x18006024,
++    0x18006028,0x18006030,0x18006034,0x1800605c,0x180060d0,
++    0x180060d4,0x180060d8,0x180060dc,0x180060b0,0x180060b4};
++static const c80_u32 c80_sched_values[C80_SCHED_N]={
++    0x00080001,0xffc80000,0x70068037,0x08000040,0x08000040,
++    0x08000040,0x08000040,0x00400040,0x00200020,0x42104210,
++    0x42104210,0x00050005,0,0x6012345f,0xedcba987};
++static c80_u32 c80_scheduler_init(struct c80_io *io,struct c80_result *r)
++{
++    struct c80_scheduler_result *s=&r->scheduler;c80_u32 i,v;
++    if(!io->scheduler_test) return 0;
++    if(r->phase!=6 || !r->ready || r->dma_started || s->saved ||
++       (c80_read(io,C80_GLO)&15u) || c80_read(io,C80_MASK) ||
++       (c80_read(io,C80_OWN)&1u)) return C80_SCHED_CONFIG;
++    /* Capture the entire configuration before the first write. A failed
++     * read must not permit partial application from an incomplete backup. */
++    for(i=0;i<C80_SCHED_N;++i) {
++        s->before[i]=c80_read(io,c80_sched_regs[i]);
++        if(s->before[i]==0xffffffffu) s->read_bad|=1u<<i;
++        s->wanted[i]=c80_sched_values[i];
++    }
++    if(s->read_bad) return C80_SCHED_CONFIG;
++    s->saved=1;
++    s->wanted[0]=(s->before[0]&~0x0fff0fffu)|0x00080001u;
++    for(i=0;i<C80_SCHED_N;++i) {
++        s->touched|=1u<<i; /* Include even a rejected/partially accepted write. */
++        c80_write(io,c80_sched_regs[i],s->wanted[i]);
++        v=s->programmed[i]=c80_read(io,c80_sched_regs[i]);
++        if(v!=s->wanted[i]) { s->program_bad|=1u<<i;return C80_SCHED_CONFIG; }
++    }
++    s->applied=1;return 0;
++}
++static c80_u32 c80_scheduler_guard(struct c80_io *io,struct c80_result *r)
++{
++    struct c80_scheduler_result *s=&r->scheduler;c80_u32 i;
++    if(!io->scheduler_test) return 0;
++    if(!s->applied) return C80_SCHED_CONFIG;
++    for(i=0;i<C80_SCHED_N;++i)
++        if(c80_read(io,c80_sched_regs[i])!=s->wanted[i]) s->guard_bad|=1u<<i;
++    return s->guard_bad?C80_SCHED_CONFIG:0;
++}
++static void c80_scheduler_capture(struct c80_io *io,struct c80_result *r,int failure)
++{
++    struct c80_scheduler_result *s=&r->scheduler;c80_u32 i;
++    if(!io->scheduler_test || !s->saved) return;
++    for(i=0;i<C80_SCHED_N;++i)
++        (failure?s->failure:s->active)[i]=c80_read(io,c80_sched_regs[i]);
++    if(failure) s->failure_valid=1;else s->active_valid=1;
++}
++static void c80_scheduler_restore(struct c80_io *io,struct c80_result *r)
++{
++    struct c80_scheduler_result *s=&r->scheduler;c80_u32 i;
++    if(!s->saved || !s->touched) return;
++    /* No scheduler writes under a running DMA engine or MCU. This is
++     * configuration restoration, never permission to reclaim pinned DMA. */
++    if(!r->mcu_stopped || (c80_read(io,C80_GLO)&15u)) {
++        s->restore_refused=1;r->critical=r->mcu_stopped?C80_CRITICAL_DMA:C80_CRITICAL_RESET;return;
++    }
++    for(i=C80_SCHED_N;i;i--) if(s->touched&(1u<<(i-1)))
++        c80_write(io,c80_sched_regs[i-1],s->before[i-1]);
++    for(i=0;i<C80_SCHED_N;++i) {
++        s->after[i]=c80_read(io,c80_sched_regs[i]);
++        if((s->touched&(1u<<i)) && s->after[i]!=s->before[i]) s->restore_bad|=1u<<i;
++    }
++    if(s->restore_bad) r->cleanup_flags|=C80_CLEANUP_SCHED;
++    else s->restored=1;
++}
+ /* The OS serializes these helpers with a raw IRQ-safe lock. The hard IRQ
+  * has no waits, allocation, descriptor access or pool lifetime dependency.
+  * The CPU IRQ is one-shot too, including on an unexpected/invalid source.
+@@ -1465,8 +1547,10 @@
+     c80_u32 i,rc,status=0,slot,stagnant=0;
+     int continuous=index==1 && io->net_recycle_test;
+     w->started=1;
++    if(index==1) c80_scheduler_capture(io,r,0);
+     if(index==1 && io->assoc_reply_test) r->assoc_window_start_us=start;
+     for(i=0;continuous || i<=(index?c80_beacon_target(io):30000000u)/1000u;++i) {
++        rc=c80_scheduler_guard(io,r);if(rc) return rc;
+         if(io->netdev_test && io->net_stop_requested && io->net_stop_requested(io->context)) {
+             c80_u32 drain;
+             r->net.stop_requested=1;c80_net_close(io,r);
+@@ -1726,6 +1810,7 @@
+     if(r->rings_touched) for(i=0;i<4;++i) for(j=0;j<3;++j)
+         c80_write(io,c80_ring_regs[i]+4*j,r->rings_before[i][j]);
+     if(r->auth_ring_touched) for(i=0;i<3;++i) c80_write(io,C80_AUTH_RING+4*i,r->auth_ring_before[i]);
++    c80_scheduler_restore(io,r);if(r->critical) return;
+     if(r->dma_cfg_touched) c80_write(io,C80_GLO,r->glo_before);
+     for(i=3;i;i--) if(r->controls_touched&(1u<<(i-1))) {
+         v=c80_read(io,c80_controls[i-1]);
+@@ -1778,6 +1863,9 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->scheduler_test && (!io->net_recycle_test || !io->watch_test)) {
++        r->primary=C80_SCHED_CONFIG;return r->primary;
++    }
+     if(io->net_recycle_test && (!io->netdev_test || !io->net_stop_requested || !io->long_beacon_test)) {
+         r->primary=C80_NET_PREREQ;return r->primary;
+     }
+@@ -1934,6 +2022,7 @@
+         for(i=0;i<3;++i) if(c80_read(io,C80_AUTH_RING+4*i)!=auth_programmed[i]) { rc=C80_AUTH_RING_PROGRAM;goto done; }
+         r->auth_ring_programmed=1;
+     }
++    rc=c80_scheduler_init(io,r);if(rc) goto done;
+     if(c80_read(io,C80_MASK) || (c80_read(io,C80_GLO)&15)) {
+         rc=C80_BAD_DMA; goto done;
+     }
+@@ -1954,6 +2043,7 @@
+     if(!rc && r->nvm_valid) rc=c80_nvm_roundtrip(io,r);
+     if(!rc && io->devinfo_test) rc=c80_devinfo_roundtrip(io,r);
+ done:
++    if(rc) c80_scheduler_capture(io,r,1);
+     if(rc && io->net_recycle_test && r->net.inflight &&
+        r->net.active_slot<C80_NET_RECYCLE_RING_N)
+         c80_transport_snapshot(io,r,5,r->net.active_slot,
