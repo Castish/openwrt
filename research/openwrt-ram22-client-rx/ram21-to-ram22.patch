@@ -1,0 +1,572 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -70,6 +70,7 @@
+     c80_u32 rx0_rearm_test; /* Return completed RX0 buffers; bounded64-frame poll budget. */
+     c80_u32 beacon_state_test; /* Five stored MAC snapshots + two OEM TSF queries. */
+     c80_u32 bss_period_test; /* Match BASIC timing to beacon/SYNC100TU/DTIM1. */
++    c80_u32 rx1_rearm_test,management_rx_test; /* Bounded event return and client RX counters. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -86,7 +87,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+-    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -97,6 +98,11 @@
+ struct c80_watch_window {
+     c80_u32 started,complete,elapsed_us,samples,last_good_us,fault_bits;
+     struct c80_hif_sample before,last;
++};
++struct c80_management_counts {
++    c80_u32 headers,subtype[16],short_header,bad_fc,peer_bad,protected_ordered,fragments,to_us;
++    c80_u32 probe_eligible,probe_test_ssid,probe_wildcard,probe_other_ssid,probe_short_ssid;
++    c80_u32 auth_to_us,auth_open_request,auth_other,assoc_to_us,reassoc_to_us,deauth_to_us,disassoc_to_us;
+ };
+ struct c80_result {
+     c80_u32 phase,primary,cleanup,critical,ready,own_before,own_last,own_sent;
+@@ -164,6 +170,10 @@
+     c80_u32 tsf_attempted[2],tsf_valid[2],tsf_category[2],tsf_ext[2],tsf_low[2],tsf_high[2];
+     c80_u32 tsf_event_bytes[2],tsf_dma_bytes[2],tsf_wait_us[2],tsf_polls[2],tsf_delta_valid;
+     c80_u64 tsf_observed_us[2],tsf_delta_us;
++    c80_u32 rx1_packets,rx1_rearmed,rx1_publishes,rx1_last_cpu,rx1_readback,rx1_budget_yields;
++    c80_u32 rx1_unmatched,rx1_short,rx1_meta_valid,rx1_meta_phase,rx1_meta_pid,rx1_meta_eid;
++    c80_u32 rx1_meta_seq,rx1_meta_ext,rx1_meta_event_bytes,rx1_meta_dma_bytes;
++    struct c80_management_counts management[2]; /* control38, beacon37; no packet/address saved. */
+ 
+ 
+ };
+@@ -280,6 +290,62 @@
+     if(cid==0xed) { p[38]=0; p[41]=0x3c; p[43]=1; }
+     for(i=0;i<bytes;++i) p[64+i]=body[i];
+     return n;
++}
++/* Bounded header candidates only. No FCS validation, peer address retention,
++ * packet copying, management response or association implementation. */
++static int c80_mac_equal(const c80_u8 *a,const c80_u8 *b)
++{ c80_u32 i; for(i=0;i<6;++i) if(a[i]!=b[i]) return 0; return 1; }
++static int c80_mac_broadcast(const c80_u8 *a)
++{ c80_u32 i; for(i=0;i<6;++i) if(a[i]!=255) return 0; return 1; }
++static void c80_management_receive(struct c80_io *io,struct c80_result *r,
++                                    const c80_u8 *p,c80_u32 bytes)
++{
++    static const c80_u8 ssid[9]={'C','8','0','-','R','A','M','1','6'};
++    const c80_u8 *own=io->pool->nvm_payload+8;
++    struct c80_management_counts *m; c80_u32 fc,sub,i,nonzero=0,da,bssid;
++    if(!io->management_rx_test || !r->devinfo_mac_valid || !r->nvm_equal ||
++       (r->phase!=38 && r->phase!=37)) return;
++    m=&r->management[r->phase==37];
++    if(bytes<2) { ++m->short_header; return; }
++    fc=c80_get16(p);
++    if(fc&3) { ++m->bad_fc; return; }
++    if((fc>>2)&3) return; /* data/control have no management layout */
++    if(bytes<24) { ++m->short_header; return; }
++    if(fc&0x300) { ++m->bad_fc; return; } /* management ToDS/FromDS invalid */
++    sub=(fc>>4)&15; ++m->headers; ++m->subtype[sub];
++    for(i=0;i<6;++i) nonzero|=p[10+i];
++    if((p[10]&1) || !nonzero || c80_mac_equal(p+10,own)) { ++m->peer_bad; return; }
++    da=c80_mac_equal(p+4,own); bssid=c80_mac_equal(p+16,own);
++    if(da) ++m->to_us;
++    if(fc&0xc000) { ++m->protected_ordered; return; }
++    if((fc&0x400) || (c80_get16(p+22)&15)) { ++m->fragments; return; }
++    if(sub==4) {
++        if(!(da || c80_mac_broadcast(p+4)) || !(bssid || c80_mac_broadcast(p+16))) return;
++        ++m->probe_eligible;
++        /* Only inspect the first SSID IE. Do not assume the trailing FCS
++         * was stripped, and do not interpret arbitrary remaining IEs. */
++        if(bytes<26 || p[24]!=0 || p[25]>32 || p[25]>bytes-26) { ++m->probe_short_ssid; return; }
++        if(!p[25]) { ++m->probe_wildcard; return; }
++        if(p[25]==sizeof(ssid)) {
++            for(i=0;i<sizeof(ssid);++i) if(p[26+i]!=ssid[i]) break;
++            if(i==sizeof(ssid)) { ++m->probe_test_ssid; return; }
++        }
++        ++m->probe_other_ssid; return;
++    }
++    if(!da || !bssid) return;
++    if(sub==11) {
++        if(bytes<30) { ++m->short_header; return; }
++        ++m->auth_to_us;
++        if(!c80_get16(p+24) && c80_get16(p+26)==1 && !c80_get16(p+28)) ++m->auth_open_request;
++        else ++m->auth_other;
++    } else if(sub==0 || sub==2 || sub==10 || sub==12) {
++        c80_u32 need=sub==0?28:sub==2?34:26;
++        if(bytes<need) { ++m->short_header; return; }
++        if(sub==0) ++m->assoc_to_us;
++        else if(sub==2) ++m->reassoc_to_us;
++        else if(sub==10) ++m->disassoc_to_us;
++        else ++m->deauth_to_us;
++    }
+ }
+ /* Exact OEM4031b680/type and4031b68c..b728/group/padding rules. RX0
+  * frames never enter the MCU event decoder when this experiment is enabled.
+@@ -314,6 +380,7 @@
+         if(offset>total) { r->radio_rx_bad=3; return C80_RADIO_RX_BAD; }
+         if(p[6]&0x80) { ++r->radio_rx_translated; goto recycle; }
+         ++r->radio_raw_frames;
++        c80_management_receive(io,r,p+offset,total-offset);
+         /* Count only complete raw management-beacon header candidates.
+          * No addresses/SSID/payload are saved or printed. FCS not verified. */
+         if(total-offset>=36 && (c80_get16(p+offset)&0xfc)==0x80 &&
+@@ -341,176 +408,210 @@
+ }
+ static const c80_u8 c80_radio_ext[5]={0x46,8,0x4e,0x46,0x46};
+ static c80_u32 c80_radio_index(c80_u32 phase) { return phase==32?4:phase-27; }
++static c80_u32 c80_parse_event(struct c80_io *io,struct c80_result *r,
++    const c80_u8 *p,c80_u32 size,c80_u32 sequence,c80_u32 event,c80_u32 *status)
++{
++    c80_u32 n;
++    if(size<25) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++    r->last_event_len=c80_get16(p+16);
++    r->last_packet_id=c80_get16(p+18);
++    r->last_event_id=p[20]; r->last_event_seq=p[21];
++    if(r->last_event_len<9 || r->last_event_len>size-16) return C80_RX_BAD;
++    /* OEM4026410c treats generic EID1 status at event+8; semaphore
++     * EID4 has the same8-byte event prefix. Do not accept unrelated IDs. */
++    r->last_event_ext=p[20]==0xed?p[24]:0;
++    r->last_event_status=p[20]==0xed?0:p[24];
++    if(r->last_packet_id!=0xe000 || p[20]!=event || p[21]!=sequence) {
++        ++r->rx_ignored; return C80_RX_TIMEOUT;
++    }
++    if(event==0xed) {
++        if(r->phase==39 || r->phase==40) {
++            c80_u32 k=r->phase-39;
++            if(p[24]!=0x3c) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++            r->tsf_ext[k]=p[24]; r->tsf_event_bytes[k]=r->last_event_len; r->tsf_dma_bytes[k]=size;
++            if(r->last_event_len!=24 || size<40) return C80_TSF_BAD_REPLY;
++            r->tsf_category[k]=c80_get16(p+28);
++            if(r->tsf_category[k]!=2) return C80_TSF_BAD_REPLY;
++            r->tsf_low[k]=c80_get32(p+32); r->tsf_high[k]=c80_get32(p+36);
++            r->tsf_valid[k]=1; *status=0; return 0;
++        }
++        if(r->phase>=33 && r->phase<=36) {
++            c80_u32 k=r->phase-33,sync=k==0 || k==3,ext=sync?0x26:0x49;
++            if(p[24]!=0 && p[24]!=ext) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++            r->beacon_ext[k]=p[24]; r->beacon_event_bytes[k]=r->last_event_len;
++            r->beacon_dma_bytes[k]=size;
++            /* Sync flags27 minimum16;offload flags0f expectedffff ignores
++             * OEMlengthcheck. Host requires8B base and full DMA bounds. */
++            if(r->last_event_len<(sync?28u:20u) || size<(sync?44u:36u))
++                return C80_BEACON_BAD_REPLY;
++            r->beacon_base_read[k]=1; r->beacon_tail_bytes[k]=r->last_event_len-(sync?28:20);
++            r->beacon_echo[k]=p[28]; r->beacon_status[k]=c80_get32(p+32);
++            if(r->beacon_echo[k]!=ext) return C80_BEACON_BAD_REPLY;
++            if(sync) {
++                r->beacon_index[k]=p[36]; r->beacon_count[k]=c80_get16(p+38);
++                if(!r->beacon_status[k] && (r->beacon_index[k] || r->beacon_count[k]!=1))
++                    return C80_BEACON_BAD_REPLY;
++            }
++            r->beacon_valid[k]=1; *status=r->beacon_status[k]; return 0;
++        }
++        if((r->phase>=27 && r->phase<=30) || r->phase==32) {
++            c80_u32 step=c80_radio_index(r->phase),ext=c80_radio_ext[step];
++            if(p[24]!=0 && p[24]!=ext) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++            r->radio_ext[step]=p[24]; r->radio_event_bytes[step]=r->last_event_len;
++            r->radio_dma_bytes[step]=size;
++            /* Actual flags0f: fixed8B body,12B extended event prefix. */
++            if(size<36 || r->last_event_len!=20) return C80_RADIO_BAD_REPLY;
++            r->radio_echo[step]=p[28]; r->radio_status[step]=c80_get32(p+32);
++            if(r->radio_echo[step]!=ext) return C80_RADIO_BAD_REPLY;
++            r->radio_valid[step]=1; *status=r->radio_status[step]; return 0;
++        }
++        if(r->phase==25 || r->phase==26) {
++            c80_u32 step=r->phase-25;
++            /* Actual BSS builder402ee440: ext26, flags0x27/minimum16B,
++             * callback402eccdc status at body+4. Same bounded variable
++             * envelope as DEVINFO; add strict echo/index/TLV-count. */
++            if(p[24]!=0 && p[24]!=0x26) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++            r->bss_ext[step]=p[24]; r->bss_event_bytes[step]=r->last_event_len;
++            r->bss_dma_bytes[step]=size;
++            if(size<44 || r->last_event_len<28) return C80_BSS_BAD_REPLY;
++            r->bss_base_read[step]=1; r->bss_tail_bytes[step]=r->last_event_len-28;
++            r->bss_echo[step]=p[28]; r->bss_status[step]=c80_get32(p+32);
++            r->bss_index[step]=p[36]; r->bss_count[step]=c80_get16(p+38);
++            if(r->bss_echo[step]!=0x26) return C80_BSS_BAD_REPLY;
++            if(!r->bss_status[step] &&
++               (r->bss_index[step] || r->bss_count[step]!=(step?1u:2u)))
++                return C80_BSS_BAD_REPLY;
++            r->bss_valid[step]=1; *status=r->bss_status[step]; return 0;
++        }
++        if(r->phase==23 || r->phase==24) {
++            c80_u32 step=r->phase-23;
++            /* OEM flags0x27 include variable-response bit0x20. Actual
++             * dispatcher402637b4/4026419c accepts >=16B body and passes
++             * its real length to callback402ecc4c. RAM12 measured40B
++             * event=12B header+28B body. Read only the16B base; its tail
++             * has no fields consumed by the OEM callback. The preceding
++             * envelope checks bound the entire declared event to DMA. */
++            if(p[24]!=0 && p[24]!=0x2a) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++            r->devinfo_ext[step]=p[24];
++            r->devinfo_event_bytes[step]=r->last_event_len;
++            r->devinfo_dma_bytes[step]=size;
++            if(size<44 || r->last_event_len<28)
++                return C80_DEVINFO_BAD_REPLY;
++            r->devinfo_tail_bytes[step]=r->last_event_len-28;
++            r->devinfo_base_read[step]=1; r->devinfo_echo[step]=p[28];
++            r->devinfo_status[step]=c80_get32(p+32);
++            r->devinfo_ownmac[step]=p[36]; r->devinfo_count[step]=c80_get16(p+38);
++            if(r->devinfo_echo[step]!=0x2a) return C80_DEVINFO_BAD_REPLY;
++            if(!r->devinfo_status[step] &&
++               (r->devinfo_ownmac[step] || r->devinfo_count[step]!=1))
++                return C80_DEVINFO_BAD_REPLY;
++            r->devinfo_valid[step]=1; *status=r->devinfo_status[step]; return 0;
++        }
++        if(r->phase==21) {
++            /* Generic extended-command result:12B header +8B body.
++             * OEM SET's callback is a NOP; additionally check echo21
++             * and the full32-bit firmware status here. */
++            if(p[24]!=0) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++            if(size<36 || r->last_event_len!=20 || p[28]!=0x21)
++                return C80_NVM_BAD_REPLY;
++            r->nvm_set_status=c80_get32(p+32); r->nvm_set_valid=1;
++            *status=r->nvm_set_status; return 0;
++        }
++        if(r->phase==22) {
++            /* OEM4030eb8c:source/format/offset/count6B then content.
++             * Matched-sequence OEM dispatch accepts both command echo
++             *9b and documented buffer-read result8a. Bound everything
++             * independently, then compare every requested byte. OEM's
++             * callback copies count bytes at body+6 and ignores trailing
++             * alignment. RAM10 measured1044=ALIGN4(12+6+1024). */
++            if(p[24]!=0x8a && p[24]!=0x9b) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++            r->nvm_get_ext=p[24];
++            if(size<34 || r->last_event_len<18) return C80_NVM_BAD_REPLY;
++            r->nvm_get_source=p[28]; r->nvm_get_format=p[29];
++            r->nvm_get_offset=c80_get16(p+30); r->nvm_get_count=c80_get16(p+32);
++            /* Earlier generic event bounds require the complete declared
++             * event to fit the DMA frame, including any two pad bytes.
++             * Accept exactly the packed length or its4-byte alignment;
++             * no arbitrary extra bytes, shortened content or new offset. */
++            if(r->last_event_len!=18+C80_NVM_BYTES &&
++               r->last_event_len!=((18+C80_NVM_BYTES+3)&~3u))
++                return C80_NVM_BAD_REPLY;
++            if(r->nvm_get_source!=1 || r->nvm_get_format!=1 ||
++               r->nvm_get_offset || r->nvm_get_count!=C80_NVM_BYTES)
++                return C80_NVM_BAD_REPLY;
++            r->nvm_get_padding=r->last_event_len-(18+C80_NVM_BYTES);
++            r->nvm_get_valid=1; r->nvm_get_crc=c80_crc(p+34,C80_NVM_BYTES);
++            for(n=0;n<C80_NVM_BYTES;++n) {
++                r->nvm_compared=n+1;
++                if(p[34+n]!=io->pool->nvm_payload[4+n]) {
++                    r->nvm_mismatch_valid=1; r->nvm_mismatch_offset=n;
++                    return C80_NVM_MISMATCH;
++                }
++            }
++            r->nvm_equal=1; *status=0; return 0;
++        }
++        /* Actual OEM EIDed dispatch uses a12B event header, then
++         * category5/count@4/counters@8. Only the one requested counter
++         * is accepted, with exact event length and strict DMA bounds. */
++        if(p[24]!=0x3c) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
++        if(size<40 || r->last_event_len!=24) return C80_QUERY_BAD;
++        r->counter_category=c80_get16(p+28); r->counter_count=p[32];
++        if(r->counter_category!=5 || r->counter_count!=1) return C80_QUERY_BAD;
++        r->counter_value=c80_get32(p+36); r->counter_query_valid=1;
++        *status=0; return 0;
++    }
++    *status=p[24]; return 0;
++}
++static void c80_unmatched_event(struct c80_result *r,const c80_u8 *p,c80_u32 size)
++{
++    ++r->rx1_unmatched; r->rx1_short+=size<25;
++    r->rx1_meta_valid=0; r->rx1_meta_phase=r->phase; r->rx1_meta_dma_bytes=size;
++    r->rx1_meta_event_bytes=r->rx1_meta_pid=r->rx1_meta_eid=r->rx1_meta_seq=r->rx1_meta_ext=0;
++    if(size>=18) { r->rx1_meta_event_bytes=c80_get16(p+16);r->rx1_meta_valid|=1; }
++    if(size>=20) { r->rx1_meta_pid=c80_get16(p+18);r->rx1_meta_valid|=2; }
++    if(size>=21) { r->rx1_meta_eid=p[20];r->rx1_meta_valid|=4; }
++    if(size>=22) { r->rx1_meta_seq=p[21];r->rx1_meta_valid|=8; }
++    if(size>=25 && p[20]==0xed) { r->rx1_meta_ext=p[24];r->rx1_meta_valid|=16; }
++}
++static c80_u32 c80_return_event(struct c80_io *io,struct c80_result *r,c80_u32 index,c80_u32 control)
++{
++    /* Actual OEM RX1 callback/publication uses the same LS0-preserving
++     * capacity reset as RX0, then CPU consumed-slot index at4418. */
++    io->pool->rx[1][index].addr1=0;io->pool->rx[1][index].info=0;
++    io->pool->rx[1][index].ctrl=(control&C80_LS0)|(C80_RX_SIZE<<16);
++    ++r->rx1_rearmed;io->dma_order(io->context,1);
++    r->rx1_last_cpu=index;c80_write(io,0x18004418,index);++r->rx1_publishes;
++    r->rx1_readback=c80_read(io,0x18004418);
++    if(r->rx1_readback!=index) return C80_RX1_RETURN_FAILED;
++    r->rx_next[1]=(index+1)%C80_RX_N;return 0;
++}
+ static c80_u32 c80_receive(struct c80_io *io,struct c80_result *r,
+                            c80_u32 sequence,c80_u32 event,c80_u32 *status)
+ {
+-    c80_u32 q,index,control,size,n; const c80_u8 *p;
+-    /* MCU event RX1 remains bounded63/non-recycled. Radio RX0 may recycle. */
+-    if(io->radio_test) {
+-        c80_u32 rc=c80_radio_receive(io,r);
+-        if(rc) return rc;
+-    }
+-    for(q=io->radio_test?1:0;q<2;++q) for(n=0;n<C80_RX_N;++n) {
+-        index=r->rx_next[q];
+-        if(index>=C80_RX_N-1) return C80_RX_BAD;
+-        control=io->pool->rx[q][index].ctrl;
+-        if(!(control&C80_DONE)) break;
+-        io->dma_order(io->context,0);
+-        size=(control>>16)&0x3fff;
+-        ++r->rx_packets; ++r->rx_next[q];
+-        if(!(control&C80_LS0) || !size || size>C80_RX_SIZE) {
+-            r->rx_bad_ctrl=control; return C80_RX_BAD;
+-        }
+-        p=io->pool->data[q][index];
+-        if(size<25) { ++r->rx_ignored; continue; }
+-        r->last_event_len=c80_get16(p+16);
+-        r->last_packet_id=c80_get16(p+18);
+-        r->last_event_id=p[20]; r->last_event_seq=p[21];
+-        if(r->last_event_len<9 || r->last_event_len>size-16) return C80_RX_BAD;
+-        /* OEM4026410c treats generic EID1 status at event+8; semaphore
+-         * EID4 has the same8-byte event prefix. Do not accept unrelated IDs. */
+-        r->last_event_ext=p[20]==0xed?p[24]:0;
+-        r->last_event_status=p[20]==0xed?0:p[24];
+-        if(r->last_packet_id!=0xe000 || p[20]!=event || p[21]!=sequence) {
+-            ++r->rx_ignored; continue;
+-        }
+-        if(event==0xed) {
+-            if(r->phase==39 || r->phase==40) {
+-                c80_u32 k=r->phase-39;
+-                if(p[24]!=0x3c) { ++r->rx_ignored; continue; }
+-                r->tsf_ext[k]=p[24]; r->tsf_event_bytes[k]=r->last_event_len; r->tsf_dma_bytes[k]=size;
+-                if(r->last_event_len!=24 || size<40) return C80_TSF_BAD_REPLY;
+-                r->tsf_category[k]=c80_get16(p+28);
+-                if(r->tsf_category[k]!=2) return C80_TSF_BAD_REPLY;
+-                r->tsf_low[k]=c80_get32(p+32); r->tsf_high[k]=c80_get32(p+36);
+-                r->tsf_valid[k]=1; *status=0; return 0;
++    c80_u32 q,index,control,size,n,rc,returned,recycle;const c80_u8 *p;
++    if(io->radio_test) { rc=c80_radio_receive(io,r);if(rc) return rc; }
++    for(q=io->radio_test?1:0;q<2;++q) {
++        recycle=q==1 && io->rx1_rearm_test;
++        for(n=0;n<C80_RX_N;++n) {
++            index=r->rx_next[q];
++            if(index>=(recycle?C80_RX_N:C80_RX_N-1)) return C80_RX_BAD;
++            control=io->pool->rx[q][index].ctrl;
++            if(!(control&C80_DONE)) break;
++            io->dma_order(io->context,0);size=(control>>16)&0x3fff;
++            ++r->rx_packets;if(!recycle) ++r->rx_next[q];
++            if(!(control&C80_LS0) || !size || size>C80_RX_SIZE ||
++               (recycle && (size<16 || io->pool->rx[q][index].addr!=c80_dma_address(io,io->pool->data[q][index]) || io->pool->rx[q][index].addr1))) {
++                r->rx_bad_ctrl=control;return C80_RX_BAD;
+             }
+-            if(r->phase>=33 && r->phase<=36) {
+-                c80_u32 k=r->phase-33,sync=k==0 || k==3,ext=sync?0x26:0x49;
+-                if(p[24]!=0 && p[24]!=ext) { ++r->rx_ignored; continue; }
+-                r->beacon_ext[k]=p[24]; r->beacon_event_bytes[k]=r->last_event_len;
+-                r->beacon_dma_bytes[k]=size;
+-                /* Sync flags27 minimum16;offload flags0f expectedffff ignores
+-                 * OEMlengthcheck. Host requires8B base and full DMA bounds. */
+-                if(r->last_event_len<(sync?28u:20u) || size<(sync?44u:36u))
+-                    return C80_BEACON_BAD_REPLY;
+-                r->beacon_base_read[k]=1; r->beacon_tail_bytes[k]=r->last_event_len-(sync?28:20);
+-                r->beacon_echo[k]=p[28]; r->beacon_status[k]=c80_get32(p+32);
+-                if(r->beacon_echo[k]!=ext) return C80_BEACON_BAD_REPLY;
+-                if(sync) {
+-                    r->beacon_index[k]=p[36]; r->beacon_count[k]=c80_get16(p+38);
+-                    if(!r->beacon_status[k] && (r->beacon_index[k] || r->beacon_count[k]!=1))
+-                        return C80_BEACON_BAD_REPLY;
+-                }
+-                r->beacon_valid[k]=1; *status=r->beacon_status[k]; return 0;
++            p=io->pool->data[q][index];if(recycle) ++r->rx1_packets;
++            rc=c80_parse_event(io,r,p,size,sequence,event,status);
++            if(recycle && (rc==0 || rc==C80_RX_TIMEOUT)) {
++                if(rc==C80_RX_TIMEOUT) c80_unmatched_event(r,p,size);
++                returned=c80_return_event(io,r,index,control);if(returned) return returned;
+             }
+-            if((r->phase>=27 && r->phase<=30) || r->phase==32) {
+-                c80_u32 step=c80_radio_index(r->phase),ext=c80_radio_ext[step];
+-                if(p[24]!=0 && p[24]!=ext) { ++r->rx_ignored; continue; }
+-                r->radio_ext[step]=p[24]; r->radio_event_bytes[step]=r->last_event_len;
+-                r->radio_dma_bytes[step]=size;
+-                /* Actual flags0f: fixed8B body,12B extended event prefix. */
+-                if(size<36 || r->last_event_len!=20) return C80_RADIO_BAD_REPLY;
+-                r->radio_echo[step]=p[28]; r->radio_status[step]=c80_get32(p+32);
+-                if(r->radio_echo[step]!=ext) return C80_RADIO_BAD_REPLY;
+-                r->radio_valid[step]=1; *status=r->radio_status[step]; return 0;
+-            }
+-            if(r->phase==25 || r->phase==26) {
+-                c80_u32 step=r->phase-25;
+-                /* Actual BSS builder402ee440: ext26, flags0x27/minimum16B,
+-                 * callback402eccdc status at body+4. Same bounded variable
+-                 * envelope as DEVINFO; add strict echo/index/TLV-count. */
+-                if(p[24]!=0 && p[24]!=0x26) { ++r->rx_ignored; continue; }
+-                r->bss_ext[step]=p[24]; r->bss_event_bytes[step]=r->last_event_len;
+-                r->bss_dma_bytes[step]=size;
+-                if(size<44 || r->last_event_len<28) return C80_BSS_BAD_REPLY;
+-                r->bss_base_read[step]=1; r->bss_tail_bytes[step]=r->last_event_len-28;
+-                r->bss_echo[step]=p[28]; r->bss_status[step]=c80_get32(p+32);
+-                r->bss_index[step]=p[36]; r->bss_count[step]=c80_get16(p+38);
+-                if(r->bss_echo[step]!=0x26) return C80_BSS_BAD_REPLY;
+-                if(!r->bss_status[step] &&
+-                   (r->bss_index[step] || r->bss_count[step]!=(step?1u:2u)))
+-                    return C80_BSS_BAD_REPLY;
+-                r->bss_valid[step]=1; *status=r->bss_status[step]; return 0;
+-            }
+-            if(r->phase==23 || r->phase==24) {
+-                c80_u32 step=r->phase-23;
+-                /* OEM flags0x27 include variable-response bit0x20. Actual
+-                 * dispatcher402637b4/4026419c accepts >=16B body and passes
+-                 * its real length to callback402ecc4c. RAM12 measured40B
+-                 * event=12B header+28B body. Read only the16B base; its tail
+-                 * has no fields consumed by the OEM callback. The preceding
+-                 * envelope checks bound the entire declared event to DMA. */
+-                if(p[24]!=0 && p[24]!=0x2a) { ++r->rx_ignored; continue; }
+-                r->devinfo_ext[step]=p[24];
+-                r->devinfo_event_bytes[step]=r->last_event_len;
+-                r->devinfo_dma_bytes[step]=size;
+-                if(size<44 || r->last_event_len<28)
+-                    return C80_DEVINFO_BAD_REPLY;
+-                r->devinfo_tail_bytes[step]=r->last_event_len-28;
+-                r->devinfo_base_read[step]=1; r->devinfo_echo[step]=p[28];
+-                r->devinfo_status[step]=c80_get32(p+32);
+-                r->devinfo_ownmac[step]=p[36]; r->devinfo_count[step]=c80_get16(p+38);
+-                if(r->devinfo_echo[step]!=0x2a) return C80_DEVINFO_BAD_REPLY;
+-                if(!r->devinfo_status[step] &&
+-                   (r->devinfo_ownmac[step] || r->devinfo_count[step]!=1))
+-                    return C80_DEVINFO_BAD_REPLY;
+-                r->devinfo_valid[step]=1; *status=r->devinfo_status[step]; return 0;
+-            }
+-            if(r->phase==21) {
+-                /* Generic extended-command result:12B header +8B body.
+-                 * OEM SET's callback is a NOP; additionally check echo21
+-                 * and the full32-bit firmware status here. */
+-                if(p[24]!=0) { ++r->rx_ignored; continue; }
+-                if(size<36 || r->last_event_len!=20 || p[28]!=0x21)
+-                    return C80_NVM_BAD_REPLY;
+-                r->nvm_set_status=c80_get32(p+32); r->nvm_set_valid=1;
+-                *status=r->nvm_set_status; return 0;
+-            }
+-            if(r->phase==22) {
+-                /* OEM4030eb8c:source/format/offset/count6B then content.
+-                 * Matched-sequence OEM dispatch accepts both command echo
+-                 *9b and documented buffer-read result8a. Bound everything
+-                 * independently, then compare every requested byte. OEM's
+-                 * callback copies count bytes at body+6 and ignores trailing
+-                 * alignment. RAM10 measured1044=ALIGN4(12+6+1024). */
+-                if(p[24]!=0x8a && p[24]!=0x9b) { ++r->rx_ignored; continue; }
+-                r->nvm_get_ext=p[24];
+-                if(size<34 || r->last_event_len<18) return C80_NVM_BAD_REPLY;
+-                r->nvm_get_source=p[28]; r->nvm_get_format=p[29];
+-                r->nvm_get_offset=c80_get16(p+30); r->nvm_get_count=c80_get16(p+32);
+-                /* Earlier generic event bounds require the complete declared
+-                 * event to fit the DMA frame, including any two pad bytes.
+-                 * Accept exactly the packed length or its4-byte alignment;
+-                 * no arbitrary extra bytes, shortened content or new offset. */
+-                if(r->last_event_len!=18+C80_NVM_BYTES &&
+-                   r->last_event_len!=((18+C80_NVM_BYTES+3)&~3u))
+-                    return C80_NVM_BAD_REPLY;
+-                if(r->nvm_get_source!=1 || r->nvm_get_format!=1 ||
+-                   r->nvm_get_offset || r->nvm_get_count!=C80_NVM_BYTES)
+-                    return C80_NVM_BAD_REPLY;
+-                r->nvm_get_padding=r->last_event_len-(18+C80_NVM_BYTES);
+-                r->nvm_get_valid=1; r->nvm_get_crc=c80_crc(p+34,C80_NVM_BYTES);
+-                for(n=0;n<C80_NVM_BYTES;++n) {
+-                    r->nvm_compared=n+1;
+-                    if(p[34+n]!=io->pool->nvm_payload[4+n]) {
+-                        r->nvm_mismatch_valid=1; r->nvm_mismatch_offset=n;
+-                        return C80_NVM_MISMATCH;
+-                    }
+-                }
+-                r->nvm_equal=1; *status=0; return 0;
+-            }
+-            /* Actual OEM EIDed dispatch uses a12B event header, then
+-             * category5/count@4/counters@8. Only the one requested counter
+-             * is accepted, with exact event length and strict DMA bounds. */
+-            if(p[24]!=0x3c) { ++r->rx_ignored; continue; }
+-            if(size<40 || r->last_event_len!=24) return C80_QUERY_BAD;
+-            r->counter_category=c80_get16(p+28); r->counter_count=p[32];
+-            if(r->counter_category!=5 || r->counter_count!=1) return C80_QUERY_BAD;
+-            r->counter_value=c80_get32(p+36); r->counter_query_valid=1;
+-            *status=0; return 0;
+-        }
+-        *status=p[24]; return 0;
++            if(rc!=C80_RX_TIMEOUT) return rc;
++        }
++        if(recycle && n==C80_RX_N) ++r->rx1_budget_yields;
+     }
+     return C80_RX_TIMEOUT;
+ }
+@@ -1190,6 +1291,12 @@
+     if(io->bss_period_test && (!io->beacon_state_test || !io->radio_test || !io->bss_test || !io->devinfo_test)) {
+         r->primary=C80_BSS_PERIOD_BAD_PREREQ; return r->primary;
+     }
++    if(io->rx1_rearm_test && (!io->radio_test || !io->rx0_rearm_test)) {
++        r->primary=C80_RX1_BAD_PREREQ;return r->primary;
++    }
++    if(io->management_rx_test && (!io->rx1_rearm_test || !io->beacon_state_test || !io->bss_period_test || !io->beacon_test || !io->bss_test || !io->devinfo_test)) {
++        r->primary=C80_MGMT_BAD_PREREQ;return r->primary;
++    }
+     if(io->rx0_rearm_test && !io->radio_test) {
+         r->primary=C80_RADIO_BAD_STATE; return C80_RADIO_BAD_STATE;
+     }
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -352,6 +352,36 @@
+     }
+     mutex_unlock(&c->lock); return n;
+ }
++/* Saved scalar counters only. No packet/address storage or MMIO on read. */
++static ssize_t mgmt_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_result *r;struct c80_management_counts *m;ssize_t n=0;unsigned k,i;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock);r=&c->result;
++    n+=sysfs_emit_at(buf,n,"enabled=%u responses_sent=0 client_association_supported=0 FCS_verified=0 packet_or_address_saved=0\n",c->io.management_rx_test);
++    for(k=0;k<2;++k) {
++        const char *name=k?"beacon":"control";m=&r->management[k];
++        n+=sysfs_emit_at(buf,n,"%s headers=%u short=%u bad_fc=%u peer_bad=%u protected_ordered=%u fragments=%u to_us=%u\n",
++            name,m->headers,m->short_header,m->bad_fc,m->peer_bad,m->protected_ordered,m->fragments,m->to_us);
++        n+=sysfs_emit_at(buf,n,"%s subtype_counts=",name);
++        for(i=0;i<16;++i) n+=sysfs_emit_at(buf,n,"%s%u",i?"/":"",m->subtype[i]);
++        n+=sysfs_emit_at(buf,n,"\n%s probe_eligible=%u probe_test_ssid=%u probe_wildcard=%u probe_other_ssid=%u probe_first_ssid_bad=%u\n",
++            name,m->probe_eligible,m->probe_test_ssid,m->probe_wildcard,m->probe_other_ssid,m->probe_short_ssid);
++        n+=sysfs_emit_at(buf,n,"%s auth_to_us=%u auth_open_request=%u auth_other=%u assoc_to_us=%u reassoc_to_us=%u deauth_to_us=%u disassoc_to_us=%u\n",
++            name,m->auth_to_us,m->auth_open_request,m->auth_other,m->assoc_to_us,m->reassoc_to_us,m->deauth_to_us,m->disassoc_to_us);
++    }
++    mutex_unlock(&c->lock);return n;
++}
++static ssize_t events_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock);r=&c->result;
++    n=sysfs_emit(buf,"recycle=%u packets=%u rearmed=%u publishes=%u cursor=%u last_cpu=%u readback=%u budget_yields=%u\nunmatched=%u short=%u meta_valid=%02x phase=%u PID=%04x EID=%02x sequence=%u extension=%02x event_bytes=%u DMA_bytes=%u payload_saved=0\n",
++        c->io.rx1_rearm_test,r->rx1_packets,r->rx1_rearmed,r->rx1_publishes,r->rx_next[1],r->rx1_last_cpu,r->rx1_readback,r->rx1_budget_yields,
++        r->rx1_unmatched,r->rx1_short,r->rx1_meta_valid,r->rx1_meta_phase,r->rx1_meta_pid,r->rx1_meta_eid,r->rx1_meta_seq,r->rx1_meta_ext,r->rx1_meta_event_bytes,r->rx1_meta_dma_bytes);
++    mutex_unlock(&c->lock);return n;
++}
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+                           const char *buf,size_t count)
+ {
+@@ -390,17 +420,19 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU BSS timing/beacon state test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU client RX/event recycling test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
++static struct kobj_attribute mgmt_attr=__ATTR_RO(mgmt);
++static struct kobj_attribute events_attr=__ATTR_RO(events);
+ static struct kobj_attribute state_attr=__ATTR_RO(state);
+ static struct kobj_attribute watch_attr=__ATTR_RO(watch);
+ static struct kobj_attribute beacon_attr=__ATTR_RO(beacon);
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -440,7 +472,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
