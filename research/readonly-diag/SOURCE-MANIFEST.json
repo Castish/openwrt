@@ -1,0 +1,30 @@
+{
+  "source_snapshot": "readonly-diag",
+  "files": [
+    {
+      "file": "build.sh",
+      "bytes": 763,
+      "original_source_sha256": "acc3c5f7c126b61ac7e5a2addbd469ee5b44bca506d0363fb418c64aaafec3c7"
+    },
+    {
+      "file": "c80-readonly-diag.S",
+      "bytes": 3833,
+      "original_source_sha256": "a2bb7dd6509895cffdc16c1b47a81995af2bce49d7e7e09612d073d3c06ef0a1"
+    },
+    {
+      "file": "check-stale-instructions.py",
+      "bytes": 2303,
+      "original_source_sha256": "c5c96d358ed881961534f1dfb51e4f61e0495634b8c5f2a3cdce861acc5d7685"
+    },
+    {
+      "file": "diag.ld",
+      "bytes": 390,
+      "original_source_sha256": "b6514e99cb33bb690051871e9069619411d8dee2a079f84a082b4d72b275ffc5"
+    },
+    {
+      "file": "verify-binary.py",
+      "bytes": 4848,
+      "original_source_sha256": "1cfb3f66351f0a700db978c29ef51ab83560ca475f1af13edb6abf8a1c8ca0a6"
+    }
+  ]
+}
