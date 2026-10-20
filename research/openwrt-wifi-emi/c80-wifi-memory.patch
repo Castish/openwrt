@@ -1,0 +1,27 @@
+--- a/mt7626-archer-c80-v1-ram.dts
++++ b/mt7626-archer-c80-v1-emi.dts
+@@ -13,12 +13,24 @@
+     aliases { serial0 = &uart0; };
+     chosen {
+         stdout-path = "serial0:115200n8";
++        linux,usable-memory-range = <0x40200000 0x01e00000>;
+         bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 loglevel=8 rdinit=/init panic=0 clk_ignore_unused";
+     };
+ 
+     memory@40000000 {
+         device_type = "memory";
+         reg = <0x40000000 0x02000000>;
++    };
++
++    // Preserve the factory 2MiB CONNSYS EMI window before any Wi-Fi setup.
++    reserved-memory {
++        #address-cells = <1>;
++        #size-cells = <1>;
++        ranges;
++        conn_emi: memory@40000000 {
++            reg = <0x40000000 0x00200000>;
++            no-map;
++        };
+     };
+ 
+     cpus {

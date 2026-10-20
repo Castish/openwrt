@@ -1,0 +1,70 @@
+{
+  "source_snapshot": "openwrt-wifi-emi",
+  "files": [
+    {
+      "file": "LICENSES.md",
+      "bytes": 1201,
+      "original_source_sha256": "2ee15934091f3163487a9dd884590f318f237b3e41f7da86e7bccf89a657ad9c"
+    },
+    {
+      "file": "build-dtb.sh",
+      "bytes": 1246,
+      "original_source_sha256": "13f5762d8701f8479f89e888468b4f145b7d326b1f2332716154dafca87146ca"
+    },
+    {
+      "file": "c80-openwrt-ram1-emi.preprocessed.dts",
+      "bytes": 5193,
+      "original_source_sha256": "2269fe33652c6129d01242849933f213209e376afbaccb31fbe85dc7ad8d9607"
+    },
+    {
+      "file": "c80-wifi-memory.patch",
+      "bytes": 805,
+      "original_source_sha256": "a02219d1f905bee08fbfe19a616e2afe90674b89ab854d69ac99c2481952ef50"
+    },
+    {
+      "file": "mt7626-archer-c80-v1-emi.dts",
+      "bytes": 5451,
+      "original_source_sha256": "7226130bb526635ea4ebc353756376f67ad8cd94ae667df8ed8dc1aaf3711043"
+    },
+    {
+      "file": "package.py",
+      "bytes": 5085,
+      "original_source_sha256": "c6198cb4e849c592e713f5c54cb2ef25c631a5965060ed5d3e4d1de3c10824c8"
+    },
+    {
+      "file": "qemu-base.dts",
+      "bytes": 8953,
+      "original_source_sha256": "599b31f9c678add5e26340d939da00a6e0f8762190f6dda1d8df60984c1220fc"
+    },
+    {
+      "file": "qemu-emi.dts",
+      "bytes": 9225,
+      "original_source_sha256": "a097bf1437115c3fe09fc493cacc1135c3cc753b2e84e259ed655f52cd103086"
+    },
+    {
+      "file": "run-qemu-emi-check.sh",
+      "bytes": 772,
+      "original_source_sha256": "7713aea9e5474eefc044dcbbc92d3f2c6ff933b47de716191b9894a05b9d54b8"
+    },
+    {
+      "file": "verify-decompressor.py",
+      "bytes": 3699,
+      "original_source_sha256": "4869252b28b4fe6f7b0ce9169c2867562d8e9026a4e1c7fb6bf2d96af9e3826e"
+    },
+    {
+      "file": "verify-handoff.py",
+      "bytes": 6821,
+      "original_source_sha256": "27aca90f0825988d093d88edb5f7b424ee4918d0fd2d05ea6fd2019e54ac6227"
+    },
+    {
+      "file": "verify-layout.py",
+      "bytes": 4268,
+      "original_source_sha256": "990452a06077d569766fbdc14b37e5564110443156316f9e9040dec5feeb4089"
+    },
+    {
+      "file": "verify-qemu-emi.py",
+      "bytes": 6680,
+      "original_source_sha256": "51e4ac57cc247bf8a16798429174c64d01b78483dfc87f6609dbabf73b892a46"
+    }
+  ]
+}
