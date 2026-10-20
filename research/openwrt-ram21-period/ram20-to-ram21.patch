@@ -1,0 +1,88 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -69,6 +69,7 @@
+     c80_u32 watch_test; /* Compare idle radio vs beacon window; read-only HIF watch. */
+     c80_u32 rx0_rearm_test; /* Return completed RX0 buffers; bounded64-frame poll budget. */
+     c80_u32 beacon_state_test; /* Five stored MAC snapshots + two OEM TSF queries. */
++    c80_u32 bss_period_test; /* Match BASIC timing to beacon/SYNC100TU/DTIM1. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -85,7 +86,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+-    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -144,7 +145,7 @@
+     c80_u32 bss_attempted[2],bss_valid[2],bss_status[2],bss_ext[2];
+     c80_u32 bss_index[2],bss_count[2],bss_event_bytes[2],bss_dma_bytes[2];
+     c80_u32 bss_tail_bytes[2],bss_base_read[2],bss_echo[2],bss_wait_us[2],bss_polls[2];
+-    c80_u32 bss_complete;
++    c80_u32 bss_complete,bss_period[2],bss_dtim[2];
+     c80_u32 radio_attempted[5],radio_valid[5],radio_status[5],radio_ext[5],radio_echo[5];
+     c80_u32 radio_event_bytes[5],radio_dma_bytes[5],radio_wait_us[5],radio_polls[5];
+     c80_u32 radio_complete,radio_listen_started,radio_listen_us,radio_listen_polls;
+@@ -1059,13 +1060,17 @@
+             c80_put16(body+offset,0); c80_put16(body+offset+2,16);
+             c80_put32(body+offset+8,0x10002); offset+=16;
+         }
+-        /* BASIC tag1 from actual402ecb94 and dedicated AP helper4031d708:
+-         * NETWORK_INFRA=0x10000,cipher1,BMC/WMM/PHY/beacon/DTIM0. No channel,
+-         * sync,beacon-offload,STA-record or MAC TX/RX-enable TLV/command. */
++        /* BASIC tag1: normal AP initializer403606f8 copies configured
++         * period/DTIM into args+76/+78;402ecb94 serializes them. The narrow
++         * diagnostic AP helper4031d708 zeroed these fields in older probes.
++         * Match the unchanged beacon/SYNC100TU/DTIM1 in this Linux trial.
++         * NETWORK_INFRA/cipher1/BMC/WMM/PHY and all other fields unchanged. */
+         c80_put16(body+offset,1); c80_put16(body+offset+2,28);
+         c80_put32(body+offset+4,0x10000); body[offset+8]=step==0;
+         for(i=0;i<6;++i) body[offset+12+i]=io->pool->nvm_payload[8+i];
+         body[offset+21]=1; bytes=offset+28;
++        if(io->bss_period_test) { c80_put16(body+offset+10,100);body[offset+19]=1; }
++        r->bss_period[step]=c80_get16(body+offset+10);r->bss_dtim[step]=body[offset+19];
+         c80_stage(io,r,25+step); r->bss_attempted[step]=1;
+         rc=c80_exchange(io,r,0xed,body,bytes,&status);
+         if(rc) return rc;
+@@ -1181,6 +1186,9 @@
+     c80_stage(io,r,1);
+     if(io->beacon_state_test && (!io->beacon_test || !io->watch_test || !io->rx0_rearm_test)) {
+         r->primary=C80_STATE_BAD_PREREQ; return C80_STATE_BAD_PREREQ;
++    }
++    if(io->bss_period_test && (!io->beacon_state_test || !io->radio_test || !io->bss_test || !io->devinfo_test)) {
++        r->primary=C80_BSS_PERIOD_BAD_PREREQ; return r->primary;
+     }
+     if(io->rx0_rearm_test && !io->radio_test) {
+         r->primary=C80_RADIO_BAD_STATE; return C80_RADIO_BAD_STATE;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -301,6 +301,8 @@
+     if(!c) return -ENODEV;
+     mutex_lock(&c->lock); r=&c->result;
+     n+=sysfs_emit_at(buf,n,"complete=%u SSID=C80-RAM16 channel=6 width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=94 frame_bytes=62 TIM_pos=88 clients_supported=0 TXD_format=3 frame_type=0 subtype=8\n",r->beacon_complete);
++    n+=sysfs_emit_at(buf,n,"BSS_BASIC_period_TU=%u/%u BSS_BASIC_DTIM=%u/%u\n",
++        r->bss_period[0],r->bss_period[1],r->bss_dtim[0],r->bss_dtim[1]);
+     for(i=0;i<4;++i)
+         n+=sysfs_emit_at(buf,n,"%s attempted=%u valid=%u status=%08x ext=%02x echo=%02x index=%u count=%u event=%u dma=%u tail=%u base=%u wait_us=%u polls=%u\n",
+             names[i],r->beacon_attempted[i],r->beacon_valid[i],r->beacon_status[i],r->beacon_ext[i],r->beacon_echo[i],r->beacon_index[i],r->beacon_count[i],
+@@ -388,7 +390,7 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU beacon state/TSF test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU BSS timing/beacon state test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+@@ -438,7 +440,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
