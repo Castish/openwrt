@@ -1,0 +1,17 @@
+{
+  "release": "C80 OpenWrt RAM29 recyclable Wi-Fi transport",
+  "kernel": "6.12.113-c80-openwrt-ram29-recycle",
+  "board": "TP-Link Archer C80 v1 RU, TP1900BN, MT7626 E2",
+  "not_implemented": [
+    "multiple clients or re-association lifecycle",
+    "cfg80211/mac80211/hostapd integration",
+    "WPA encryption",
+    "configured NAT/Internet",
+    "flash installation"
+  ],
+  "native_cases": 2495,
+  "snapshot_kind": "source archive imported on 2026-10-20; not an original historical Git commit",
+  "source_files_byte_identical_to_workspace": true,
+  "runtime_keys_images_firmware_dumps_and_raw_hardware_logs_included": false,
+  "original_private_release_manifest_sha256": "4df92ab254e8f9cd621e9971b9fc12f625ec5e46a8b3f2144d87c4b32d558aab"
+}

@@ -1,0 +1,362 @@
+[
+  {
+    "name": "base-files",
+    "version": "1711~f5dae5ece4",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "http://openwrt.org/",
+    "origin": "feeds/base/base-files",
+    "depends": "busybox fstools fwtool jsonfilter libc netifd openwrt-keyring procd procd-seccomp ubi-utils usign",
+    "package_checksum": "Q1bgK7aJiyAQU1PJBDKsnrAkj35Tw="
+  },
+  {
+    "name": "busybox",
+    "version": "1.37.0-r6",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "http://busybox.net/",
+    "origin": "feeds/base/utils/busybox",
+    "depends": "libc",
+    "package_checksum": "Q1j++CSiVj9mtk1oiJC59/W5vATbw="
+  },
+  {
+    "name": "dropbear",
+    "version": "2025.89-r3",
+    "architecture": "arm_cortex-a7",
+    "license": "MIT",
+    "url": "https://matt.ucc.asn.au/dropbear/",
+    "origin": "feeds/base/network/services/dropbear",
+    "depends": "libc",
+    "package_checksum": "Q1R5BHAEVzJAzOK95YE+0i6s4SD74="
+  },
+  {
+    "name": "fstools",
+    "version": "2026.05.23~16718b6e-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/system/fstools",
+    "depends": "libc ubi-utils ubox",
+    "package_checksum": "Q1Hqh+HSvC85mEXTqBKjj3tkh6TFY="
+  },
+  {
+    "name": "fwtool",
+    "version": "2025.10.03~04cd252e-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/system/fwtool",
+    "depends": "libc",
+    "package_checksum": "Q12fOsjOQ1k54hSynGRgw9ynaB6gI="
+  },
+  {
+    "name": "jshn",
+    "version": "2026.06.19~7dd12784-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/libs/libubox",
+    "depends": "libblobmsg-json20260213 libc libjson-c5 libubox20260213",
+    "package_checksum": "Q148jSoUD1U16nivZT0vKrxqrqQPU="
+  },
+  {
+    "name": "jsonfilter",
+    "version": "2026.03.16~b9034210-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "https://git.openwrt.org/project/jsonpath.git",
+    "origin": "feeds/base/utils/jsonfilter",
+    "depends": "libc libjson-c5 libubox20260213",
+    "package_checksum": "Q1f2H+UFtLhTkkupYnnVgbsK+Add4="
+  },
+  {
+    "name": "libblobmsg-json20260213",
+    "version": "2026.06.19~7dd12784-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/libs/libubox",
+    "depends": "libc libjson-c5 libubox20260213",
+    "package_checksum": "Q1WS88JYrXZn3ynZ9OahM02e3GvBY="
+  },
+  {
+    "name": "libc",
+    "version": "1.2.5-r5",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-3.0-with-GCC-exception",
+    "url": "http://www.musl-libc.org/",
+    "origin": "feeds/base/libs/toolchain",
+    "depends": "libgcc1",
+    "package_checksum": "Q1ccO+12/B2953QfbRkWh/vnAqhj8="
+  },
+  {
+    "name": "libgcc1",
+    "version": "14.3.0-r5",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-3.0-with-GCC-exception",
+    "url": "http://gcc.gnu.org/",
+    "origin": "feeds/base/libs/toolchain",
+    "depends": "",
+    "package_checksum": "Q1tVZPnFtsYcv2OmZ7vgUYe52EM2Y="
+  },
+  {
+    "name": "libjson-c5",
+    "version": "0.18-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "MIT",
+    "url": "https://json-c.github.io/json-c/",
+    "origin": "feeds/base/libs/libjson-c",
+    "depends": "libc",
+    "package_checksum": "Q1h5jI/PoH4O8p4K1Ktd2/wVKEyF8="
+  },
+  {
+    "name": "libjson-script20260213",
+    "version": "2026.06.19~7dd12784-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/libs/libubox",
+    "depends": "libc libubox20260213",
+    "package_checksum": "Q1bN8SjXjrE6U0CoMiedQ/xlmUong="
+  },
+  {
+    "name": "libnl-tiny1",
+    "version": "2025.12.02~40493a65-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "LGPL-2.1",
+    "url": "",
+    "origin": "feeds/base/libs/libnl-tiny",
+    "depends": "libc",
+    "package_checksum": "Q1WWVtAkl3Xem1w2UnzpVA+OC60Uw="
+  },
+  {
+    "name": "libubox20260213",
+    "version": "2026.06.19~7dd12784-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/libs/libubox",
+    "depends": "libc",
+    "package_checksum": "Q1QyXZy5KnyJ6SjTxXUGqSsuDvPs0="
+  },
+  {
+    "name": "libubus20251202",
+    "version": "2026.06.28~24864e78-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "LGPL-2.1",
+    "url": "",
+    "origin": "feeds/base/system/ubus",
+    "depends": "libc libubox20260213",
+    "package_checksum": "Q1SvEcwlv4VRNqIH7dVvINVHAUSWQ="
+  },
+  {
+    "name": "libuci20250120",
+    "version": "2025.12.02~66127cd7-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "LGPL-2.1",
+    "url": "",
+    "origin": "feeds/base/system/uci",
+    "depends": "libc libubox20260213",
+    "package_checksum": "Q112Az32L8jHgstq1N8B4EUP7hVgg="
+  },
+  {
+    "name": "libucode20230711",
+    "version": "2026.01.16~85922056-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/utils/ucode",
+    "depends": "libc libjson-c5",
+    "package_checksum": "Q19SUDtmMzPLqvDjwaXBXbW4FwhXY="
+  },
+  {
+    "name": "libudebug",
+    "version": "2026.01.16~875e1a7a",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/libs/udebug",
+    "depends": "libc libubox20260213 libubus20251202",
+    "package_checksum": "Q1/4h1lE3hH8nOg5Jhjf9wCoPmFbc="
+  },
+  {
+    "name": "logd",
+    "version": "2025.10.30~6f78fa49-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/system/ubox",
+    "depends": "libblobmsg-json20260213 libc libubox20260213 libubus20251202 libudebug",
+    "package_checksum": "Q14xNZEzVySVSPnj14sOzjShEondI="
+  },
+  {
+    "name": "netifd",
+    "version": "2026.02.26~cbb83a18-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/network/config/netifd",
+    "depends": "jshn libc libnl-tiny1 libubox20260213 libubus20251202 libuci20250120 libudebug ubus ubusd ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop",
+    "package_checksum": "Q1MEyjYhjeEW3+dFW6e5yU4WyPfLk="
+  },
+  {
+    "name": "openwrt-keyring",
+    "version": "2025.12.10~f0670054-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "https://openwrt.org/docs/guide-user/security/signatures",
+    "origin": "feeds/base/system/openwrt-keyring",
+    "depends": "libc",
+    "package_checksum": "Q1cJCvjNLYDjHNnRJ8X4d5xsXGIWk="
+  },
+  {
+    "name": "procd",
+    "version": "2026.03.13~58eb263d-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/system/procd",
+    "depends": "jshn libblobmsg-json20260213 libc libjson-c5 libjson-script20260213 libubox20260213 libubus20251202 libudebug ubox ubus ubusd",
+    "package_checksum": "Q1T7YDP1aJIlNVhuzXcsFbICPwgT8="
+  },
+  {
+    "name": "procd-seccomp",
+    "version": "2026.03.13~58eb263d-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/system/procd",
+    "depends": "libblobmsg-json20260213 libc libubox20260213",
+    "package_checksum": "Q1iSTuSQHuPEww58H+tY8HvxHSE5I="
+  },
+  {
+    "name": "ubi-utils",
+    "version": "2.3.0-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPLv2",
+    "url": "http://www.linux-mtd.infradead.org/",
+    "origin": "feeds/base/utils/mtd-utils",
+    "depends": "libc",
+    "package_checksum": "Q1P2AzIX3yQqC7fH8Li44mortuJeU="
+  },
+  {
+    "name": "ubox",
+    "version": "2025.10.30~6f78fa49-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "",
+    "origin": "feeds/base/system/ubox",
+    "depends": "libc libubox20260213 libubus20251202 libuci20250120 ubus ubusd",
+    "package_checksum": "Q1QQS59NmA2jjmrLEPT6PY1PEPqvI="
+  },
+  {
+    "name": "ubus",
+    "version": "2026.06.28~24864e78-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "LGPL-2.1",
+    "url": "",
+    "origin": "feeds/base/system/ubus",
+    "depends": "libblobmsg-json20260213 libc libubus20251202 ubusd",
+    "package_checksum": "Q19HtWl8U7ynCSNBri+omnMupMF7c="
+  },
+  {
+    "name": "ubusd",
+    "version": "2026.06.28~24864e78-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "LGPL-2.1",
+    "url": "",
+    "origin": "feeds/base/system/ubus",
+    "depends": "libblobmsg-json20260213 libc libubox20260213",
+    "package_checksum": "Q1Vwa9vs+wMPq9vUhWYJ9PJR1Zr1Y="
+  },
+  {
+    "name": "uci",
+    "version": "2025.12.02~66127cd7-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "LGPL-2.1",
+    "url": "",
+    "origin": "feeds/base/system/uci",
+    "depends": "libc libuci20250120",
+    "package_checksum": "Q1WweaSW2rpGMNY3WdMxYmHmGMw04="
+  },
+  {
+    "name": "ucode",
+    "version": "2026.01.16~85922056-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/utils/ucode",
+    "depends": "libc libucode20230711",
+    "package_checksum": "Q1UhQqFR/3G/j0hYFjgHXYjuWsEIo="
+  },
+  {
+    "name": "ucode-mod-fs",
+    "version": "2026.01.16~85922056-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/utils/ucode",
+    "depends": "libc ucode",
+    "package_checksum": "Q1Yitp9neX5ipowcXM9iHGw8jtSVo="
+  },
+  {
+    "name": "ucode-mod-ubus",
+    "version": "2026.01.16~85922056-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/utils/ucode",
+    "depends": "libblobmsg-json20260213 libc libubus20251202 ucode",
+    "package_checksum": "Q1RPPU39xi2IMGr8D0wbNWHlf3/wg="
+  },
+  {
+    "name": "ucode-mod-uci",
+    "version": "2026.01.16~85922056-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/utils/ucode",
+    "depends": "libc libuci20250120 ucode",
+    "package_checksum": "Q1SkAvgzmmBP37lIqkBjvdaXMvNCw="
+  },
+  {
+    "name": "ucode-mod-uloop",
+    "version": "2026.01.16~85922056-r2",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/utils/ucode",
+    "depends": "libc libubox20260213 ucode",
+    "package_checksum": "Q1q80bDT14yOVKEp93NHeWb75MRlI="
+  },
+  {
+    "name": "urngd",
+    "version": "2025.10.03~f17e33d9-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0 BSD-3-Clause",
+    "url": "",
+    "origin": "feeds/base/system/urngd",
+    "depends": "libc libubox20260213",
+    "package_checksum": "Q1kMB7D+TTR49DoqLGG+8G1FB98Ac="
+  },
+  {
+    "name": "usign",
+    "version": "2025.10.03~c4c72b1b-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "ISC",
+    "url": "",
+    "origin": "feeds/base/system/usign",
+    "depends": "libc libubox20260213",
+    "package_checksum": "Q1bavZQecCs/ORg1myaF93HWmKC8Q="
+  },
+  {
+    "name": "dnsmasq",
+    "version": "2.93-r1",
+    "architecture": "arm_cortex-a7",
+    "license": "GPL-2.0",
+    "url": "http://www.thekelleys.org.uk/dnsmasq/",
+    "origin": "feeds/base/network/services/dnsmasq",
+    "depends": "libc libubus20251202",
+    "signed_index_identity_hash": "3a452b9173545e4275e3cc7e24e94183fe410f50f6dbdafc8f7687becef771c0"
+  }
+]
