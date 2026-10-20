@@ -335,6 +335,12 @@
       "source_files": 1,
       "source_bytes": 2546,
       "snapshot_path": "research/wifi-bringup"
+    },
+    {
+      "stage": "openwrt-ram32-cfg80211",
+      "source_files": 72,
+      "source_bytes": 883289,
+      "snapshot_path": "research/openwrt-ram32-cfg80211"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

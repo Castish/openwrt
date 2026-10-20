@@ -1,0 +1,20 @@
+{
+  "snapshot_kind": "Original RAM32 source exported after software verification",
+  "source_files_byte_identical_to_workspace": true,
+  "hardware_tested": false,
+  "baseline_native_cases": 2591,
+  "new_native_control_cases": 652,
+  "QEMU_real_cfg80211_nl80211_hostapd_commands": [
+    30,
+    33
+  ],
+  "QEMU_synthetic_backend_only": true,
+  "QEMU_pinned_SSH_password_cases": 4,
+  "ARM_ELF_library_closure": 66,
+  "signed_OpenWrt_packages": 45,
+  "source_patch_files": 25,
+  "source_entries_restored": 86722,
+  "rootfs_entries_restored": 600,
+  "original_private_archive_sha256": "79b3bbe5cbe71717f9f279f3bdb5438ab20c79f7365a7d1ff918ed87553ba073",
+  "private_keys_and_OEM_firmware_images_included": false
+}

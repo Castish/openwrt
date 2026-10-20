@@ -72,3 +72,22 @@ SSH-конфигурация генерируется индивидуально
 поздних этапов задаются соответствующими исследовательскими скриптами.
 [inspect-firmware.py](../research/wifi-bringup/inspect-firmware.py) описывает
 структуру локально предоставленного OEM Wi-Fi образа без его распространения.
+
+## RAM32 cfg80211
+
+Исходники находятся в research/openwrt-ram32-cfg80211. Каталог overrides/
+содержит собственные c80-wifi, c80-hostapd и конфигурационные шаблоны;
+копируйте их по тем же относительным путям в локально собранный rootfs.
+Добавлены подписанные hostapd-basic-mbedtls, hostapd-common, libmbedtls21,
+iw, wireless-regdb, wifi-scripts и ucode-mod-nl80211/rtnl/digest. Точные версии
+перечислены в packages.lock. Шесть OEM firmware-файлов предоставляются локально.
+
+CFG80211 включён, MAC80211 не требуется: собственный драйвер использует
+device SME. Физическое ядро не включает QEMU-only C80_NET_SELFTEST.
+Архив полного патча содержит25 файлов; start_ap ждёт фактического включения
+beacon в MCU, stop_ap — завершения прежней процедуры DMA/MCU cleanup.
+Персональный auth initramfs размещён по40d00000; тот же адрес требуется
+в manifest и chosen/initrd DTB. Создавайте собственные ключи локально.
+
+Образ по-прежнему загружается из RAM. Полной UCI wifi up интеграции, WPA2
+и готового flash/sysupgrade-формата эта версия не предоставляет.

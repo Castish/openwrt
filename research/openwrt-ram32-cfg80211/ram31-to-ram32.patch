@@ -1,0 +1,652 @@
+--- a/drivers/soc/mediatek/Kconfig
++++ b/drivers/soc/mediatek/Kconfig
+@@ -80,10 +80,10 @@
+ 
+ config C80_MCU_TRANSPORT_TEST
+ 	bool "C80 RAM MCU transport experiment"
+-	depends on MACH_MT7626 && OF && FW_LOADER && !SMP
++	depends on MACH_MT7626 && OF && FW_LOADER && !SMP && CFG80211
+ 	help
+ 	  Explicit sysfs MCU transport test with coherent DMA and reserved EMI.
+-	  No 802.11 interface or flash programming support.
++	  Single open AP via cfg80211; no flash programming support.
+ 
+ config C80_NET_SELFTEST
+ 	bool "C80 network software peer (QEMU ONLY)"
+--- a/drivers/soc/mediatek/c80_mcu_transport.c
++++ b/drivers/soc/mediatek/c80_mcu_transport.c
+@@ -42,6 +42,9 @@
+     raw_spinlock_t irq_lock;
+     bool irq_cpu_on;
+     int nvm_error;
++    struct c80_cfg *cfg;
++    const u8 *peer_address;
++    bool cfg_test_only;
+     struct net_device *netdev;
+     spinlock_t net_lock;
+     struct sk_buff_head net_queue;
+@@ -51,6 +54,7 @@
+ };
+ static struct c80_linux *c80_live;
+ #include "c80_net_linux.h"
++#include "c80_cfg80211.h"
+ static const char *const c80_filenames[6]={
+     "c80/test_mcu.bin","c80/test_wifi.bin",
+     "c80/WIFI_RAM_CODE_iemi.bin","c80/WIFI_RAM_CODE_demi.bin",
+@@ -102,8 +106,12 @@
+ {
+     struct c80_linux *c=context;
+     dev_info(c->dev,"MCU transport stage%u\n",stage);
+-    if(stage==38) dev_info(c->dev,"Control window30s; beacon still disabled\n");
+-    if(stage==37) dev_info(c->dev,"Linux netdev active until stop; connect to C80-RAM16, DHCP192.168.2.2\n");
++    if(c->cfg && stage==38) WRITE_ONCE(c->cfg->prepared,true);
++    if(c->cfg && stage==37 && smp_load_acquire(&c->cfg->requested) && !READ_ONCE(c->net_stop_requested)) {
++        WRITE_ONCE(c->cfg->active,true);complete_all(&c->cfg->started);
++    }
++    if(stage==38) dev_info(c->dev,"Waiting for nl80211 START_AP; beacon disabled (30s limit)\n");
++    if(stage==37) dev_info(c->dev,"nl80211 AP active; hostapd owns control, DHCP192.168.2.2\n");
+     if(stage==21 || stage==22)
+         dev_info(c->dev,"NVM %s: waiting up to 60000 ms for MCU response\n",stage==21?"SET":"GET");
+ }
+@@ -492,6 +500,7 @@
+ {
+     struct c80_linux *c=c80_live;
+     const struct firmware *fw[6]={}; struct c80_blob blobs[6];
++    bool notify_stop=false;
+     unsigned int i; int rc;
+     if(!c || !sysfs_streq(buf,"1")) return -EINVAL;
+     if(!mutex_trylock(&c->lock)) return -EBUSY;
+@@ -511,6 +520,7 @@
+         c->rc=-ERANGE; goto done;
+     }
+     c->io.pool=c->pool; c->io.dma_base=(c80_u32)c->dma;
++    c->peer_address=c->pool->auth_frame+4;
+     c->rc=c80_run(&c->io,blobs,&c->result);
+ done:
+     if(c->pool) {
+@@ -528,9 +538,18 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
++    if(c->cfg) {
++        notify_stop=READ_ONCE(c->cfg->active) && !READ_ONCE(c->net_stop_requested);
++        c->cfg->stop_rc=c->result.critical || c->result.cleanup ||
++            (c->result.dma_started && !c->result.dma_idle)?-EIO:0;
++        WRITE_ONCE(c->cfg->active,false);WRITE_ONCE(c->cfg->finished,true);
++        complete_all(&c->cfg->started);complete_all(&c->cfg->stopped);
++    }
+     dev_info(c->dev,"MCU Linux netdev test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+-    mutex_unlock(&c->lock); return count;
++    mutex_unlock(&c->lock);
++    if(notify_stop) cfg80211_stop_iface(c->cfg->wdev.wiphy,&c->cfg->wdev,GFP_KERNEL);
++    return count;
+ }
+ static ssize_t stop_store(struct kobject *kobj,struct kobj_attribute *attr,const char *buf,size_t count)
+ {
+@@ -538,6 +557,25 @@
+     if(!c || !sysfs_streq(buf,"1")) return -EINVAL;
+     WRITE_ONCE(c->net_stop_requested,true);return count;
+ }
++static int c80_linux_ap_requested(void *context)
++{
++    struct c80_linux *c=context;struct c80_cfg *a=c->cfg;
++    if(!a || !smp_load_acquire(&a->requested)) return 0;
++    c->io.ap_ssid=a->ssid;c->io.ap_ssid_bytes=a->ssid_len;
++    c->io.ap_beacon=a->beacon;c->io.ap_beacon_bytes=a->beacon_len;
++    c->io.ap_tim_offset=a->tim_offset;return 1;
++}
++static ssize_t control_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_cfg *a=c?c->cfg:NULL;
++    if(!c) return -ENODEV;
++    return sysfs_emit(buf,"cfg80211=1 prepared=%u requested=%u active=%u finished=%u result=%d peer=%u starts=%u stops=%u rejected=%u peer_adds=%u peer_deletes=%u\n",
++        a?READ_ONCE(a->prepared):0,a?READ_ONCE(a->requested):0,a?READ_ONCE(a->active):0,
++        READ_ONCE(c->finished),READ_ONCE(c->rc),a?READ_ONCE(a->peer_present):0,
++        a?READ_ONCE(a->starts):0,a?READ_ONCE(a->stops):0,a?READ_ONCE(a->rejected):0,
++        a?READ_ONCE(a->peer_adds):0,a?READ_ONCE(a->peer_deletes):0);
++}
++static struct kobj_attribute control_attr=__ATTR_RO(control);
+ static struct kobj_attribute stop_attr=__ATTR(stop,0200,NULL,stop_store);
+ static struct kobj_attribute netdev_attr=__ATTR_RO(netdev);
+ static struct kobj_attribute scheduler_attr=__ATTR_RO(scheduler);
+@@ -553,7 +591,7 @@
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&stop_attr.attr,&scheduler_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&control_attr.attr,&stop_attr.attr,&scheduler_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -593,7 +631,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.cfg80211_test=1,.ap_requested=c80_linux_ap_requested,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
+--- a/drivers/soc/mediatek/c80_mcu_core.h
++++ b/drivers/soc/mediatek/c80_mcu_core.h
+@@ -88,6 +88,10 @@
+     c80_u32 rx1_packet_test; /* Classify RX1 descriptors before MCU event parsing. */
+     c80_u32 netdev_test; /* Linux Ethernet packet adapter, one associated peer. */
+     c80_u32 net_recycle_test; /* Explicit paired-completion reuse; stop-controlled. */
++    c80_u32 cfg80211_test; /* AP request/template supplied through nl80211. */
++    int (*ap_requested)(void *);
++    const c80_u8 *ap_beacon,*ap_ssid;
++    c80_u32 ap_beacon_bytes,ap_tim_offset,ap_ssid_bytes;
+     c80_u32 scheduler_test; /* Exact MT7626 OEM generic-QM DMA scheduler. */
+     int (*net_prepare)(void *,const c80_u8 *);
+     void (*net_link)(void *,int);
+@@ -132,7 +136,7 @@
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+     C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,C80_RX1_NOTIFY_BAD=58,C80_ASSOC_BAD_PREREQ=59,C80_STA_BAD_REPLY=60,C80_STA_REJECTED=61,C80_ASSOC_PUBLISH=62,C80_ASSOC_TIMEOUT=63,C80_ASSOC_BAD_DESC=64,C80_DATA_BAD_PREREQ=65,C80_DATA_PUBLISH=66,C80_DATA_BAD_DESC=67,C80_DATA_TIMEOUT=68,
+-    C80_SCHED_CONFIG=78,
++    C80_SCHED_CONFIG=78,C80_CFG_BAD_STATE=79,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -496,9 +500,15 @@
+ }
+ /* A single bounded legacy/open association candidate. Parse only mandatory
+  * first SSID and Supported Rates IEs, never assume trailing FCS is stripped. */
++static const c80_u8 *c80_ap_ssid(const struct c80_io *io,c80_u32 *bytes)
++{
++    static const c80_u8 legacy[9]={'C','8','0','-','R','A','M','1','6'};
++    if(io->cfg80211_test) { *bytes=io->ap_ssid_bytes;return io->ap_ssid; }
++    *bytes=sizeof(legacy);return legacy;
++}
+ static void c80_assoc_capture(struct c80_io *io,struct c80_result *r,const c80_u8 *p,c80_u32 bytes)
+ {
+-    static const c80_u8 ssid[9]={'C','8','0','-','R','A','M','1','6'};
++    c80_u32 ssid_bytes;const c80_u8 *ssid=c80_ap_ssid(io,&ssid_bytes);
+     static const c80_u8 txd[32]={0x44,0x00,0x00,0x40,0x01,0xcc,0x00,0x00,0x00,0x00,0x00,0xa0,0x00,0x38,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x20,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x01,0x00};
+     c80_u32 i,pos,len,rate,mask=0,fc;c80_u64 now;c80_u8 *f=io->pool->assoc_frame,*h=io->pool->assoc_header;
+     if(!io->assoc_reply_test || r->phase!=37 || !r->auth_submitted || !r->auth_dma_done || bytes<28) return;
+@@ -513,9 +523,9 @@
+        !r->radio_valid[3] || r->radio_status[3] || !r->beacon_valid[1] || r->beacon_status[1]) return;
+     r->assoc_request_cap=c80_get16(p+24);r->assoc_listen=c80_get16(p+26);
+     if((r->assoc_request_cap&0x13)!=1 || !r->assoc_listen) { ++r->assoc_request_bad;return; }
+-    if(bytes<39 || p[28]!=0 || p[29]!=9) { ++r->assoc_request_bad;return; }
+-    for(i=0;i<9;++i) if(p[30+i]!=ssid[i]) { ++r->assoc_request_bad;return; }
+-    pos=39;
++    if(!ssid || !ssid_bytes || ssid_bytes>32 || bytes<30+ssid_bytes || p[28]!=0 || p[29]!=ssid_bytes) { ++r->assoc_request_bad;return; }
++    for(i=0;i<ssid_bytes;++i) if(p[30+i]!=ssid[i]) { ++r->assoc_request_bad;return; }
++    pos=30+ssid_bytes;
+     if(bytes-pos<2 || p[pos]!=1 || !(len=p[pos+1]) || len>8 || len>bytes-pos-2) { ++r->assoc_request_bad;return; }
+     for(i=0;i<len;++i) {
+         rate=p[pos+2+i]&127;
+@@ -649,7 +659,7 @@
+ static void c80_management_receive(struct c80_io *io,struct c80_result *r,
+                                     const c80_u8 *p,c80_u32 bytes)
+ {
+-    static const c80_u8 ssid[9]={'C','8','0','-','R','A','M','1','6'};
++    c80_u32 ssid_bytes;const c80_u8 *ssid=c80_ap_ssid(io,&ssid_bytes);
+     const c80_u8 *own=io->pool->nvm_payload+8;
+     struct c80_management_counts *m; c80_u32 fc,sub,i,nonzero=0,da,bssid;
+     if(!io->management_rx_test || !r->devinfo_mac_valid || !r->nvm_equal ||
+@@ -675,9 +685,9 @@
+          * was stripped, and do not interpret arbitrary remaining IEs. */
+         if(bytes<26 || p[24]!=0 || p[25]>32 || p[25]>bytes-26) { ++m->probe_short_ssid; return; }
+         if(!p[25]) { ++m->probe_wildcard; return; }
+-        if(p[25]==sizeof(ssid)) {
+-            for(i=0;i<sizeof(ssid);++i) if(p[26+i]!=ssid[i]) break;
+-            if(i==sizeof(ssid)) { ++m->probe_test_ssid; return; }
++        if(ssid && ssid_bytes && ssid_bytes<=32 && p[25]==ssid_bytes) {
++            for(i=0;i<ssid_bytes;++i) if(p[26+i]!=ssid[i]) break;
++            if(i==ssid_bytes) { ++m->probe_test_ssid; return; }
+         }
+         ++m->probe_other_ssid; return;
+     }
+@@ -1585,6 +1595,13 @@
+         rc=c80_receive(io,r,0,0,&status);
+         if(rc!=C80_RX_TIMEOUT) return rc?rc:C80_BEACON_BAD_REPLY;
+         if(index==1) { rc=c80_auth_poll(io,r);if(rc) return rc;rc=c80_assoc_step(io,r);if(rc) return rc;rc=c80_data_step(io,r);if(rc) return rc;rc=c80_net_step(io,r);if(rc) return rc; }
++        if(!index && io->cfg80211_test) {
++            if(!io->ap_requested) return C80_CFG_BAD_STATE;
++            if(io->ap_requested(io->context)) { w->complete=1;return 0; }
++            if(w->elapsed_us>=30000000u) {
++                r->net.stop_requested=1;return C80_NET_STOPPED;
++            }
++        }
+         if(!continuous && w->elapsed_us>=(index?c80_beacon_target(io):30000000u)) {
+             if(index==1 && io->netdev_test) { c80_net_close(io,r);if(r->net.inflight) return C80_NET_TIMEOUT; }
+             if(index==1 && io->data_echo_test) {
+@@ -1603,12 +1620,30 @@
+ /* Exact OEM4031a734->403199fc 32B TXD for band0/OwnMac0/WCID0,
+  * CCK1Mbps/20MHz/noACK beacon. Frame fields are standard802.11; MACs from
+  * validated ROMNVM only. No template/SSID/client configuration API added. */
++static c80_u32 c80_beacon_payload(struct c80_io *io,c80_u8 *body,c80_u32 on)
++{
++    static const c80_u8 txd[32]={0x5e,0x00,0x00,0x48,0x00,0xcc,0x00,0x03,0x08,0x04,0x00,0xa0,0x01,0xf8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x08,0x00};
++    static const c80_u8 frame[62]={0x80,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x64,0x00,0x01,0x00,0x00,0x09,0x43,0x38,0x30,0x2d,0x52,0x41,0x4d,0x31,0x36,0x01,0x04,0x82,0x84,0x8b,0x96,0x03,0x01,0x06,0x05,0x04,0x00,0x01,0x00,0x00};
++    c80_u32 i,frame_bytes=io->cfg80211_test?io->ap_beacon_bytes:62u;
++    c80_u32 tim=io->cfg80211_test?io->ap_tim_offset:56u;
++    const c80_u8 *template=io->cfg80211_test?io->ap_beacon:frame;
++    if(!template || frame_bytes<42 || frame_bytes>480 || tim<36 || tim>frame_bytes-6 ||
++       template[tim]!=5 || template[tim+1]!=4 || template[tim+3]!=1) return C80_CFG_BAD_STATE;
++    if(io->cfg80211_test && (c80_get16(template)!=0x80 ||
++       !c80_mac_equal(template+10,io->pool->nvm_payload+8) ||
++       !c80_mac_equal(template+16,io->pool->nvm_payload+8))) return C80_CFG_BAD_STATE;
++    for(i=0;i<528;++i) body[i]=0;
++    body[1]=!!on;c80_put16(body+8,32+frame_bytes);c80_put16(body+10,32+tim);
++    for(i=0;i<32;++i) body[12+i]=txd[i];
++    c80_put16(body+12,32+frame_bytes);
++    for(i=0;i<frame_bytes;++i) body[44+i]=template[i];
++    for(i=0;i<6;++i) body[54+i]=body[60+i]=io->pool->nvm_payload[8+i];
++    return 0;
++}
+ static c80_u32 c80_beacon_roundtrip(struct c80_io *io,struct c80_result *r)
+ {
+     /* OEM4031a734 WDEV+86c=2 (FW beacon):pkt_ft=3,subtype8/type0.
+      * Prior zero-method context incorrectly selected HIF cut-through. */
+-    static const c80_u8 txd[32]={0x5e,0x00,0x00,0x48,0x00,0xcc,0x00,0x03,0x08,0x04,0x00,0xa0,0x01,0xf8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x08,0x00};
+-    static const c80_u8 frame[62]={0x80,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x64,0x00,0x01,0x00,0x00,0x09,0x43,0x38,0x30,0x2d,0x52,0x41,0x4d,0x31,0x36,0x01,0x04,0x82,0x84,0x8b,0x96,0x03,0x01,0x06,0x05,0x04,0x00,0x01,0x00,0x00};
+     c80_u8 *body=io->pool->beacon_body; c80_u32 k,i,n,rc,status=~0u,polls;
+     c80_u64 start,now;
+     if(!r->nvm_equal || !r->devinfo_valid[0] || r->devinfo_status[0] ||
+@@ -1620,6 +1655,8 @@
+         rc=c80_watch_window(io,r,0);
+         if(rc) return rc; /* Never enable beacon after a failed control window. */
+     }
++    /* Validate the immutable userspace profile before even SYNC ON. */
++    if(io->cfg80211_test) { rc=c80_beacon_payload(io,body,1);if(rc) return rc; }
+     for(k=0;k<4;++k) {
+         for(i=0;i<528;++i) body[i]=0;
+         if(k==0 || k==3) {
+@@ -1627,10 +1664,7 @@
+             if(k==0) { c80_put16(body+12,100); body[14]=1; body[15]=1; }
+             n=24;
+         } else {
+-            body[1]=k==1; c80_put16(body+8,94); c80_put16(body+10,88);
+-            for(i=0;i<32;++i) body[12+i]=txd[i];
+-            for(i=0;i<62;++i) body[44+i]=frame[i];
+-            for(i=0;i<6;++i) body[54+i]=body[60+i]=io->pool->nvm_payload[8+i];
++            rc=c80_beacon_payload(io,body,k==1);if(rc) return rc;
+             n=528;
+         }
+         c80_stage(io,r,33+k); r->beacon_attempted[k]=1;
+@@ -1863,6 +1897,10 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->cfg80211_test && (!io->ap_requested || !io->net_recycle_test ||
++       !io->watch_test || !io->bss_period_test || !io->bss_test || !io->beacon_test)) {
++        r->primary=C80_CFG_BAD_STATE;return r->primary;
++    }
+     if(io->scheduler_test && (!io->net_recycle_test || !io->watch_test)) {
+         r->primary=C80_SCHED_CONFIG;return r->primary;
+     }
+--- a/drivers/soc/mediatek/c80_net_linux.h
++++ b/drivers/soc/mediatek/c80_net_linux.h
+@@ -1,3 +1,7 @@
++struct c80_cfg;
++static int c80_cfg_attach(struct c80_linux *,struct net_device *,const c80_u8 *);
++static void c80_cfg_detach(struct c80_linux *);
++static void c80_cfg_peer(struct c80_linux *,int);
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ /* Linux packet adapter. The run thread exclusively owns device DMA;
+  * ndo_start_xmit only queues an skb. No pointer into an skb reaches DMA. */
+@@ -54,9 +58,18 @@
+     spin_lock_irqsave(&c->net_lock,flags);*out=c->net_stats;
+     spin_unlock_irqrestore(&c->net_lock,flags);
+ }
++/* OpenWrt hostapd explicitly sets the BSSID while bringing the interface up.
++ * This profile uses the NVM address in DEVINFO/BSS; acknowledge only the same
++ * address. An arbitrary software-only MAC change would break that contract. */
++static int c80_linux_ndo_set_mac(struct net_device *dev,void *address)
++{
++    struct sockaddr *a=address;
++    return ether_addr_equal(dev->dev_addr,a->sa_data)?0:-EOPNOTSUPP;
++}
+ static const struct net_device_ops c80_net_ops={
+     .ndo_open=c80_linux_ndo_open,.ndo_stop=c80_linux_ndo_stop,
+     .ndo_start_xmit=c80_linux_ndo_xmit,.ndo_get_stats64=c80_linux_ndo_stats,
++    .ndo_set_mac_address=c80_linux_ndo_set_mac,.ndo_validate_addr=eth_validate_addr,
+ };
+ static int c80_linux_net_prepare(void *context,const c80_u8 *mac)
+ {
+@@ -69,8 +82,10 @@
+     dev->tx_queue_len=C80_NET_QUEUE_N;dev->flags&=~IFF_MULTICAST;
+     dev->features=0;dev->hw_features=0;dev->vlan_features=0;
+     eth_hw_addr_set(dev,mac);SET_NETDEV_DEV(dev,c->dev);netif_carrier_off(dev);
+-    c->netdev=dev;rc=register_netdev(dev);
++    c->netdev=dev;rc=c80_cfg_attach(c,dev,mac);
+     if(rc) { c->netdev=NULL;free_netdev(dev);return rc; }
++    rc=register_netdev(dev);
++    if(rc) { c80_cfg_detach(c);c->netdev=NULL;free_netdev(dev);return rc; }
+     dev_info(c->dev,"c80wlan0 registered; Linux IPv4 stack, MTU%u; transport owns TX completion\n",
+              C80_NET_MTU);
+     return 0;
+@@ -88,6 +103,7 @@
+         netif_carrier_off(c->netdev);netif_tx_disable(c->netdev);
+         c80_linux_net_purge(c);
+     }
++    c80_cfg_peer(c,on);
+ }
+ static c80_u32 c80_linux_net_dequeue(void *context,c80_u8 *out,c80_u32 capacity)
+ {
+--- a/drivers/soc/mediatek/c80_net_selftest.c
++++ b/drivers/soc/mediatek/c80_net_selftest.c
+@@ -18,9 +18,11 @@
+ struct c80_linux {
+     struct device *dev;struct net_device *netdev;spinlock_t net_lock;
+     struct sk_buff_head net_queue;struct rtnl_link_stats64 net_stats;
++    struct c80_cfg *cfg;const u8 *peer_address;bool cfg_test_only;
+     bool net_accept,net_stop_requested;
+ };
+ #include "c80_net_linux.h"
++#include "c80_cfg80211.h"
+ #define CAPTURE_N 32
+ struct c80_selftest {
+     struct c80_linux adapter;
+@@ -63,30 +65,57 @@
+     memcpy(buf,s->packets[s->tail],bytes);s->tail=(s->tail+1)%CAPTURE_N;--s->count;
+     spin_unlock_irqrestore(&s->lock,flags);return bytes;
+ }
++static ssize_t station_store(struct kobject *kobj,struct kobj_attribute *attr,const char *buf,size_t count)
++{
++    if(!test || !test->adapter.cfg || !test->adapter.cfg->active) return -EAGAIN;
++    if(sysfs_streq(buf,"1")) c80_linux_net_link(&test->adapter,1);
++    else if(sysfs_streq(buf,"0")) c80_linux_net_link(&test->adapter,0);
++    else if(sysfs_streq(buf,"2")) {
++        /* QEMU-only unsolicited interface-stop event, not a device failure. */
++        c80_linux_net_link(&test->adapter,0);
++        WRITE_ONCE(test->adapter.cfg->active,false);
++        WRITE_ONCE(test->adapter.cfg->finished,true);
++        cfg80211_stop_iface(test->adapter.cfg->wdev.wiphy,&test->adapter.cfg->wdev,GFP_KERNEL);
++    } else return -EINVAL;
++    return count;
++}
++static struct kobj_attribute station_attr=__ATTR(station,0200,NULL,station_store);
++static ssize_t control_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_cfg *a=test?test->adapter.cfg:NULL;
++    if(!a) return -ENODEV;
++    return sysfs_emit(buf,"starts=%u stops=%u active=%u finished=%u\n",
++        READ_ONCE(a->starts),READ_ONCE(a->stops),READ_ONCE(a->active),READ_ONCE(a->finished));
++}
++static struct kobj_attribute control_attr=__ATTR_RO(control);
+ static const struct bin_attribute inject_attr=__BIN_ATTR(inject,0200,NULL,inject_write,C80_NET_ETH_MAX);
+ static const struct bin_attribute capture_attr=__BIN_ATTR(capture,0400,capture_read,NULL,0);
+ static int __init c80_selftest_init(void)
+ {
++    static const u8 peer[6]={0x02,0xc0,0x80,0x28,0,2};
+     static const u8 mac[6]={0x02,0xc0,0x80,0x28,0x00,0x01};
+     struct platform_device *pdev;struct c80_selftest *s;int rc;
+     if(!IS_ENABLED(CONFIG_ARCH_VIRT)) return -ENODEV;
+     pdev=platform_device_register_simple("c80-net-selftest",-1,NULL,0);
+     if(IS_ERR(pdev)) return PTR_ERR(pdev);
+     s=kzalloc(sizeof(*s),GFP_KERNEL);if(!s) { rc=-ENOMEM;goto device; }
+-    s->adapter.dev=&pdev->dev;spin_lock_init(&s->adapter.net_lock);
++    s->adapter.dev=&pdev->dev;s->adapter.cfg_test_only=true;
++    s->adapter.peer_address=peer;spin_lock_init(&s->adapter.net_lock);
+     skb_queue_head_init(&s->adapter.net_queue);spin_lock_init(&s->lock);
+     rc=c80_linux_net_prepare(&s->adapter,mac);if(rc) goto memory;
+     s->kobj=kobject_create_and_add("c80_net_selftest",kernel_kobj);
+     if(!s->kobj) { rc=-ENOMEM;goto netdev; }
+     test=s;rc=sysfs_create_bin_file(s->kobj,&inject_attr);if(rc) goto kobj;
+     rc=sysfs_create_bin_file(s->kobj,&capture_attr);if(rc) goto inject;
++    rc=sysfs_create_file(s->kobj,&station_attr.attr);if(rc) goto inject;
++    rc=sysfs_create_file(s->kobj,&control_attr.attr);if(rc) goto inject;
+     c80_linux_net_link(&s->adapter,1);INIT_DELAYED_WORK(&s->poll,c80_selftest_poll);
+     schedule_delayed_work(&s->poll,msecs_to_jiffies(10));
+     pr_info("C80 QEMU SOFTWARE PEER ONLY: real Linux netdev callbacks, no C80 MCU/DMA/radio\n");
+     return 0;
+ inject:sysfs_remove_bin_file(s->kobj,&inject_attr);
+ kobj:test=NULL;kobject_put(s->kobj);
+-netdev:unregister_netdev(s->adapter.netdev);free_netdev(s->adapter.netdev);
++netdev:unregister_netdev(s->adapter.netdev);c80_cfg_detach(&s->adapter);free_netdev(s->adapter.netdev);
+ memory:kfree(s);
+ device:platform_device_unregister(pdev);return rc;
+ }
+--- a/arch/arm/boot/dts/mediatek/mt7626-archer-c80-v1-ram.dts
++++ b/arch/arm/boot/dts/mediatek/mt7626-archer-c80-v1-ram.dts
+@@ -12,6 +12,8 @@
+ 
+     aliases { serial0 = &uart0; };
+     chosen {
++        linux,initrd-start = <0x40d00000>;
++        linux,initrd-end = <0x40d01000>;
+         stdout-path = "serial0:115200n8";
+         linux,usable-memory-range = <0x40200000 0x01e00000>;
+         bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 loglevel=8 rdinit=/init panic=0 clk_ignore_unused";
+--- /dev/null
++++ b/drivers/soc/mediatek/c80_cfg80211.h
+@@ -0,0 +1,232 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Single AP, device SME, CCK/channel6 transport. No encryption is advertised.
++ * All MCU/DMA access stays in the run thread; nl80211 uses completions only.
++ * Included after the Linux packet callbacks in both real and QEMU adapters. */
++#ifndef C80_CFG80211_H
++#define C80_CFG80211_H
++#include <net/cfg80211.h>
++#include <linux/completion.h>
++#include <linux/jiffies.h>
++#include <linux/unaligned.h>
++#define C80_CFG_BEACON_MAX 480u /* 512-byte firmware template minus32-byte TXD. */
++struct c80_cfg {
++    struct c80_linux *owner;
++    struct wireless_dev wdev;
++    struct ieee80211_channel channel;
++    struct ieee80211_rate rates[4];
++    struct ieee80211_supported_band band;
++    struct completion started,stopped;
++    bool prepared,requested,active,finished,peer_present,authorized;
++    u8 peer[ETH_ALEN],ssid[32],beacon[C80_CFG_BEACON_MAX];
++    u32 ssid_len,beacon_len,tim_offset;
++    unsigned long peer_since;
++    u32 starts,stops,rejected,peer_adds,peer_deletes;
++    int stop_rc;
++};
++static struct c80_cfg *c80_cfg_from_wiphy(struct wiphy *wiphy)
++{ return wiphy_priv(wiphy); }
++
++static int c80_cfg_beacon(struct net_device *dev,const struct cfg80211_beacon_data *b,
++                         u8 *out,u32 *bytes,u32 *tim,const u8 *ssid,u32 ssid_len)
++{
++    const u8 *parts[2]={b->head,b->tail};size_t lengths[2]={b->head_len,b->tail_len};
++    size_t k,pos,n;bool found_ssid=false,found_rates=false,found_channel=false;
++    if(!b->head || b->head_len<36 || b->head_len>C80_CFG_BEACON_MAX-6 ||
++       b->tail_len>C80_CFG_BEACON_MAX-6-b->head_len || (b->tail_len && !b->tail)) return -EINVAL;
++    if(get_unaligned_le16(b->head)!=IEEE80211_STYPE_BEACON ||
++       !is_broadcast_ether_addr(b->head+4) ||
++       !ether_addr_equal(b->head+10,dev->dev_addr) || !ether_addr_equal(b->head+16,dev->dev_addr) ||
++       get_unaligned_le16(b->head+32)!=100 || get_unaligned_le16(b->head+34)!=WLAN_CAPABILITY_ESS) return -EOPNOTSUPP;
++    for(k=0;k<2;++k) for(pos=k?0:36;pos<lengths[k];pos+=n+2) {
++        u8 id;const u8 *p=parts[k]+pos;
++        if(lengths[k]-pos<2 || (n=p[1])>lengths[k]-pos-2) return -EINVAL;
++        id=p[0];
++        if(id==WLAN_EID_SSID) {
++            if(found_ssid || n!=ssid_len || memcmp(p+2,ssid,n)) return -EINVAL;
++            found_ssid=true;
++        } else if(id==WLAN_EID_SUPP_RATES) {
++            static const u8 supported[]={0x82,0x84,0x8b,0x96};
++            if(found_rates || n!=4 || memcmp(p+2,supported,4)) return -EOPNOTSUPP;
++            found_rates=true;
++        } else if(id==WLAN_EID_DS_PARAMS) {
++            if(found_channel || n!=1 || p[2]!=6) return -EOPNOTSUPP;
++            found_channel=true;
++        } else if(id==WLAN_EID_TIM || id==WLAN_EID_RSN || id==WLAN_EID_HT_CAPABILITY ||
++                  id==WLAN_EID_HT_OPERATION || id==WLAN_EID_VHT_CAPABILITY ||
++                  id==WLAN_EID_VHT_OPERATION || id==WLAN_EID_EXT_SUPP_RATES ||
++                  id==WLAN_EID_VENDOR_SPECIFIC || id==WLAN_EID_EXTENSION) return -EOPNOTSUPP;
++    }
++    if(!found_ssid || !found_rates || !found_channel) return -EINVAL;
++    memcpy(out,b->head,b->head_len);*tim=b->head_len;
++    memcpy(out+*tim,(const u8[]){WLAN_EID_TIM,4,0,1,0,0},6);
++    if(b->tail_len) memcpy(out+*tim+6,b->tail,b->tail_len);
++    *bytes=b->head_len+6+b->tail_len;return 0;
++}
++
++static int c80_cfg_start_ap(struct wiphy *wiphy,struct net_device *dev,
++                           struct cfg80211_ap_settings *s)
++{
++    struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);struct c80_linux *c=a->owner;
++    u8 frame[C80_CFG_BEACON_MAX];u32 bytes,tim;int rc;
++    if(!s->ssid || !s->ssid_len || s->ssid_len>32 || s->hidden_ssid!=NL80211_HIDDEN_SSID_NOT_IN_USE ||
++       s->beacon_interval!=100 || s->dtim_period!=1 || s->privacy || s->crypto.wpa_versions ||
++       s->crypto.cipher_group || s->crypto.n_ciphers_pairwise || s->crypto.n_akm_suites ||
++       (s->auth_type!=NL80211_AUTHTYPE_OPEN_SYSTEM && s->auth_type!=NL80211_AUTHTYPE_AUTOMATIC) ||
++       !s->chandef.chan || s->chandef.chan->center_freq!=2437 ||
++       s->chandef.center_freq1!=2437 || s->chandef.center_freq2 ||
++       s->chandef.width!=NL80211_CHAN_WIDTH_20_NOHT) { ++a->rejected;return -EOPNOTSUPP; }
++    rc=c80_cfg_beacon(dev,&s->beacon,frame,&bytes,&tim,s->ssid,s->ssid_len);
++    if(rc) { ++a->rejected;return rc; }
++    if(a->requested || a->active || a->finished) return -EALREADY;
++    if(!READ_ONCE(a->prepared)) return -EAGAIN;
++    memcpy(a->ssid,s->ssid,s->ssid_len);a->ssid_len=s->ssid_len;
++    memcpy(a->beacon,frame,bytes);a->beacon_len=bytes;a->tim_offset=tim;
++    ++a->starts;smp_store_release(&a->requested,true);
++    if(IS_ENABLED(CONFIG_C80_NET_SELFTEST) && c->cfg_test_only) {
++        WRITE_ONCE(a->active,true);return 0;
++    }
++    if(!wait_for_completion_timeout(&a->started,msecs_to_jiffies(10000))) {
++        WRITE_ONCE(c->net_stop_requested,true);return -ETIMEDOUT;
++    }
++    return READ_ONCE(a->active) && !READ_ONCE(a->finished)?0:-EIO;
++}
++static int c80_cfg_stop_ap(struct wiphy *wiphy,struct net_device *dev,unsigned int link_id)
++{
++    struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);struct c80_linux *c=a->owner;
++    if(link_id) return -EINVAL;
++    ++a->stops;
++    if(IS_ENABLED(CONFIG_C80_NET_SELFTEST) && c->cfg_test_only) {
++        c80_linux_net_link(c,0);WRITE_ONCE(a->active,false);WRITE_ONCE(a->finished,true);return 0;
++    }
++    WRITE_ONCE(c->net_stop_requested,true);
++    if(!wait_for_completion_timeout(&a->stopped,msecs_to_jiffies(20000))) return -ETIMEDOUT;
++    return a->stop_rc; /* Completion also reports failed/critical cleanup. */
++}
++static int c80_cfg_change_beacon(struct wiphy *wiphy,struct net_device *dev,struct cfg80211_ap_update *s)
++{
++    struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);u8 frame[C80_CFG_BEACON_MAX];u32 n,tim;int rc;
++    rc=c80_cfg_beacon(dev,&s->beacon,frame,&n,&tim,a->ssid,a->ssid_len);
++    if(rc) return rc;
++    /* This first control port freezes the offloaded template for this run. */
++    return n==a->beacon_len && tim==a->tim_offset && !memcmp(frame,a->beacon,n)?0:-EOPNOTSUPP;
++}
++static int c80_cfg_change_iface(struct wiphy *wiphy,struct net_device *dev,
++                               enum nl80211_iftype type,struct vif_params *params)
++{ return type==NL80211_IFTYPE_AP?0:-EOPNOTSUPP; }
++static int c80_cfg_change_bss(struct wiphy *wiphy,struct net_device *dev,struct bss_parameters *p)
++{
++    static const u8 rates[4]={2,4,11,22};
++    if(p->use_short_preamble>0 || p->use_short_slot_time>0 || p->use_cts_prot>0 || p->ap_isolate>0 ||
++       p->ht_opmode>=0 || (p->basic_rates_len && (p->basic_rates_len!=4 || memcmp(p->basic_rates,rates,4)))) return -EOPNOTSUPP;
++    return 0;
++}
++static int c80_cfg_get_channel(struct wiphy *wiphy,struct wireless_dev *wdev,
++                              unsigned int link_id,struct cfg80211_chan_def *chandef)
++{
++    if(link_id) return -EINVAL;
++    cfg80211_chandef_create(chandef,&c80_cfg_from_wiphy(wiphy)->channel,NL80211_CHAN_NO_HT);return 0;
++}
++static int c80_cfg_station(struct wiphy *wiphy,struct net_device *dev,const u8 *mac,struct station_info *s)
++{
++    struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);struct rtnl_link_stats64 st;
++    if(!READ_ONCE(a->peer_present) || !ether_addr_equal(mac,a->peer)) return -ENOENT;
++    c80_linux_ndo_stats(dev,&st);
++    s->filled=BIT_ULL(NL80211_STA_INFO_RX_PACKETS)|BIT_ULL(NL80211_STA_INFO_TX_PACKETS)|
++        BIT_ULL(NL80211_STA_INFO_RX_BYTES64)|BIT_ULL(NL80211_STA_INFO_TX_BYTES64)|
++        BIT_ULL(NL80211_STA_INFO_CONNECTED_TIME)|BIT_ULL(NL80211_STA_INFO_STA_FLAGS);
++    s->rx_packets=st.rx_packets;s->tx_packets=st.tx_packets;s->rx_bytes=st.rx_bytes;s->tx_bytes=st.tx_bytes;
++    s->connected_time=jiffies_to_msecs(jiffies-a->peer_since)/1000;
++    s->sta_flags.mask=BIT(NL80211_STA_FLAG_AUTHENTICATED)|BIT(NL80211_STA_FLAG_ASSOCIATED)|BIT(NL80211_STA_FLAG_AUTHORIZED);
++    s->sta_flags.set=s->sta_flags.mask;
++    if(!READ_ONCE(a->authorized)) s->sta_flags.set&=~BIT(NL80211_STA_FLAG_AUTHORIZED);
++    return 0;
++}
++static int c80_cfg_dump_station(struct wiphy *wiphy,struct net_device *dev,int idx,u8 *mac,struct station_info *s)
++{
++    struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);
++    if(idx || !READ_ONCE(a->peer_present)) return -ENOENT;
++    ether_addr_copy(mac,a->peer);return c80_cfg_station(wiphy,dev,mac,s);
++}
++static int c80_cfg_change_station(struct wiphy *wiphy,struct net_device *dev,const u8 *mac,struct station_parameters *p)
++{
++    struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);
++    unsigned long flags;
++    u32 allowed=BIT(NL80211_STA_FLAG_AUTHENTICATED)|BIT(NL80211_STA_FLAG_ASSOCIATED)|BIT(NL80211_STA_FLAG_AUTHORIZED);
++    if(!READ_ONCE(a->peer_present) || !ether_addr_equal(mac,a->peer)) return -ENOENT;
++    if(p->sta_flags_set&~allowed || p->vlan || p->plink_action) return -EOPNOTSUPP;
++    if(p->sta_flags_mask&~p->sta_flags_set&
++       (BIT(NL80211_STA_FLAG_AUTHENTICATED)|BIT(NL80211_STA_FLAG_ASSOCIATED))) return -EOPNOTSUPP;
++    if(p->sta_flags_mask&BIT(NL80211_STA_FLAG_AUTHORIZED)) {
++        WRITE_ONCE(a->authorized,!!(p->sta_flags_set&BIT(NL80211_STA_FLAG_AUTHORIZED)));
++        spin_lock_irqsave(&a->owner->net_lock,flags);
++        WRITE_ONCE(a->owner->net_accept,READ_ONCE(a->authorized));
++        spin_unlock_irqrestore(&a->owner->net_lock,flags);
++    }
++    return 0;
++}
++static int c80_cfg_del_station(struct wiphy *wiphy,struct net_device *dev,struct station_del_parameters *p)
++{
++    struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);
++    if(!READ_ONCE(a->peer_present)) return 0;
++    /* Per-peer disconnect/reassociation needs a separate transport lifecycle;
++     * stop_ap already performs the proven STA/BSS/device OFF sequence. */
++    return -EOPNOTSUPP;
++}
++/* hostapd's generic nl80211 initialization requires the CONNECT command in
++ * GET_WIPHY even for an AP-only device. Station interfaces are never exposed;
++ * this entry rejects that operation rather than claiming a connection. */
++static int c80_cfg_station_connect_unsupported(struct wiphy *wiphy,struct net_device *dev,
++                                              struct cfg80211_connect_params *params)
++{ return -EOPNOTSUPP; }
++static int c80_cfg_station_disconnect_unsupported(struct wiphy *wiphy,struct net_device *dev,u16 reason)
++{ return -EOPNOTSUPP; }
++static const struct cfg80211_ops c80_cfg_ops={
++    .change_virtual_intf=c80_cfg_change_iface,.start_ap=c80_cfg_start_ap,
++    .stop_ap=c80_cfg_stop_ap,.change_beacon=c80_cfg_change_beacon,
++    .change_bss=c80_cfg_change_bss,.get_channel=c80_cfg_get_channel,
++    .get_station=c80_cfg_station,.dump_station=c80_cfg_dump_station,
++    .change_station=c80_cfg_change_station,.del_station=c80_cfg_del_station,
++    .connect=c80_cfg_station_connect_unsupported,
++    .disconnect=c80_cfg_station_disconnect_unsupported,
++};
++static int c80_cfg_attach(struct c80_linux *c,struct net_device *dev,const u8 *mac)
++{
++    struct wiphy *wiphy;struct c80_cfg *a;int rc;unsigned i;
++    static const int bitrates[4]={10,20,55,110};
++    wiphy=wiphy_new(&c80_cfg_ops,sizeof(*a));if(!wiphy) return -ENOMEM;
++    a=wiphy_priv(wiphy);a->owner=c;
++    init_completion(&a->started);init_completion(&a->stopped);
++    a->channel=(struct ieee80211_channel){.band=NL80211_BAND_2GHZ,.center_freq=2437,.hw_value=6,.max_power=20};
++    for(i=0;i<4;++i) a->rates[i]=(struct ieee80211_rate){.bitrate=bitrates[i],.hw_value=i};
++    a->band=(struct ieee80211_supported_band){.channels=&a->channel,.n_channels=1,.bitrates=a->rates,.n_bitrates=4};
++    set_wiphy_dev(wiphy,c->dev);ether_addr_copy(wiphy->perm_addr,mac);
++    wiphy->bands[NL80211_BAND_2GHZ]=&a->band;wiphy->interface_modes=BIT(NL80211_IFTYPE_AP);
++    wiphy->flags|=WIPHY_FLAG_HAVE_AP_SME;wiphy->signal_type=CFG80211_SIGNAL_TYPE_MBM;
++    wiphy->max_ap_assoc_sta=1;
++    wiphy->available_antennas_tx=1;wiphy->available_antennas_rx=1;
++    rc=wiphy_register(wiphy);if(rc) { wiphy_free(wiphy);return rc; }
++    a->wdev.wiphy=wiphy;a->wdev.netdev=dev;a->wdev.iftype=NL80211_IFTYPE_AP;
++    dev->ieee80211_ptr=&a->wdev;c->cfg=a;
++    if(IS_ENABLED(CONFIG_C80_NET_SELFTEST) && c->cfg_test_only) WRITE_ONCE(a->prepared,true);
++    return 0;
++}
++static void c80_cfg_detach(struct c80_linux *c)
++{
++    struct c80_cfg *a=c->cfg;if(!a) return;
++    wiphy_unregister(a->wdev.wiphy);wiphy_free(a->wdev.wiphy);c->cfg=NULL;
++}
++static void c80_cfg_peer(struct c80_linux *c,int on)
++{
++    struct c80_cfg *a=c->cfg;struct station_info s={};
++    if(!a || !READ_ONCE(a->active)) return;
++    if(on && !a->peer_present && c->peer_address) {
++        ether_addr_copy(a->peer,c->peer_address);a->peer_since=jiffies;
++        WRITE_ONCE(a->authorized,true);WRITE_ONCE(a->peer_present,true);++a->peer_adds;
++        c80_cfg_station(a->wdev.wiphy,c->netdev,a->peer,&s);
++        cfg80211_new_sta(c->netdev,a->peer,&s,GFP_KERNEL);
++    } else if(!on && a->peer_present) {
++        WRITE_ONCE(a->peer_present,false);WRITE_ONCE(a->authorized,false);++a->peer_deletes;
++        cfg80211_del_sta(c->netdev,a->peer,GFP_KERNEL);
++    }
++}
++#endif
