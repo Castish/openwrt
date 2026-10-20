@@ -1,0 +1,270 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -13,6 +13,10 @@
+ typedef unsigned long long c80_u64;
+ #define C80_TX_N 128u
+ #define C80_COMMAND_SLOTS 12u
++#define C80_COMMAND_BYTES 1152u
++#define C80_NVM_BYTES 1024u
++#define C80_NVM_COPY_BYTES 960u
++#define C80_RADIO_CRC 0x5c6536a7u /* This user's preserved4KiB RADIO sector. */
+ #define C80_FRAGMENT_SLOTS 32u
+ #define C80_SYNC (C80_HIF+0xc1140)
+ #define C80_RX_N 64u
+@@ -34,9 +38,10 @@
+ struct c80_dma_pool {
+     struct c80_desc tx[C80_TX_N], fwdl[C80_TX_N];
+     struct c80_desc rx[2][C80_RX_N];
+-    c80_u8 command[C80_COMMAND_SLOTS][256];
++    c80_u8 command[C80_COMMAND_SLOTS][C80_COMMAND_BYTES];
+     c80_u8 fragment[C80_FRAGMENT_SLOTS][1024];
+     c80_u8 data[2][C80_RX_N][C80_RX_SIZE];
++    c80_u8 nvm_payload[4+C80_NVM_BYTES]; /* Not a standalone DMA packet. */
+ };
+ struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
+ struct c80_result;
+@@ -52,6 +57,7 @@
+     void (*stage)(void *,c80_u32);
+     c80_u32 (*irq_arm)(void *,struct c80_result *);
+     c80_u32 (*irq_disarm)(void *,struct c80_result *);
++    c80_u32 (*nvm_read)(void *,c80_u8 *,c80_u32,c80_u32 *);
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -63,6 +69,7 @@
+     C80_RING_PROGRAM=17,C80_DOWNLOAD_STATUS=18,C80_FWDL_TIMEOUT=19,
+     C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,C80_MODE_REFUSED=23,
+     C80_QUERY_BAD=24,C80_IRQ_NOT_SEEN=25,C80_IRQ_BAD=26,
++    C80_NVM_BAD_SOURCE=27,C80_NVM_SET_REJECTED=28,C80_NVM_BAD_REPLY=29,C80_NVM_MISMATCH=30,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -96,6 +103,11 @@
+     c80_u32 irq_mask_before,irq_mask_enable,irq_mask_after;
+     c80_u32 irq_source_before,irq_source_cleared,irq_source_seen,irq_source_after;
+     c80_u32 irq_ack_writes,irq_cpu_started,irq_cpu_stopped;
++    c80_u32 nvm_attempted,nvm_valid,nvm_radio_crc,nvm_raw_crc,nvm_upload_crc;
++    c80_u32 nvm_set_attempted,nvm_set_valid,nvm_set_status;
++    c80_u32 nvm_get_attempted,nvm_get_valid,nvm_get_source,nvm_get_format;
++    c80_u32 nvm_get_offset,nvm_get_count,nvm_get_crc,nvm_get_ext,nvm_equal;
++    c80_u32 nvm_mismatch_valid,nvm_mismatch_offset;
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -241,6 +253,37 @@
+             ++r->rx_ignored; continue;
+         }
+         if(event==0xed) {
++            if(r->phase==21) {
++                /* Generic extended-command result:12B header +8B body.
++                 * OEM SET's callback is a NOP; additionally check echo21
++                 * and the full32-bit firmware status here. */
++                if(p[24]!=0) { ++r->rx_ignored; continue; }
++                if(size<36 || r->last_event_len!=20 || p[28]!=0x21)
++                    return C80_NVM_BAD_REPLY;
++                r->nvm_set_status=c80_get32(p+32); r->nvm_set_valid=1;
++                *status=r->nvm_set_status; return 0;
++            }
++            if(r->phase==22) {
++                /* OEM4030eb8c:source/format/offset/count6B then content.
++                 * Matched-sequence OEM dispatch accepts both command echo
++                 *9b and documented buffer-read result8a. Bound everything
++                 * independently, then compare every requested byte. */
++                if(p[24]!=0x8a && p[24]!=0x9b) { ++r->rx_ignored; continue; }
++                r->nvm_get_ext=p[24];
++                if(size<34+C80_NVM_BYTES || r->last_event_len!=18+C80_NVM_BYTES)
++                    return C80_NVM_BAD_REPLY;
++                r->nvm_get_source=p[28]; r->nvm_get_format=p[29];
++                r->nvm_get_offset=c80_get16(p+30); r->nvm_get_count=c80_get16(p+32);
++                if(r->nvm_get_source!=1 || r->nvm_get_format!=1 ||
++                   r->nvm_get_offset || r->nvm_get_count!=C80_NVM_BYTES)
++                    return C80_NVM_BAD_REPLY;
++                r->nvm_get_valid=1; r->nvm_get_crc=c80_crc(p+34,C80_NVM_BYTES);
++                for(n=0;n<C80_NVM_BYTES;++n) if(p[34+n]!=io->pool->nvm_payload[4+n]) {
++                    r->nvm_mismatch_valid=1; r->nvm_mismatch_offset=n;
++                    return C80_NVM_MISMATCH;
++                }
++                r->nvm_equal=1; *status=0; return 0;
++            }
+             /* Actual OEM EIDed dispatch uses a12B event header, then
+              * category5/count@4/counters@8. Only the one requested counter
+              * is accepted, with exact event length and strict DMA bounds. */
+@@ -290,13 +333,17 @@
+ {
+     c80_u32 slot=r->command_submitted,sequence=c80_next_sequence(r),i,rx=0,tx=0,rc,len;
+     c80_u64 start,now; struct c80_desc *d;
+-    if(slot>=C80_COMMAND_SLOTS || bytes>192 || !sequence || sequence>15) return C80_TX_TIMEOUT;
++    if(slot>=C80_COMMAND_SLOTS || bytes>C80_COMMAND_BYTES-64 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+     if(cid==0xed) {
+-        if(!r->main_ready || r->phase!=20) return C80_QUERY_BAD;
++        if(!r->main_ready || r->phase<20 || r->phase>22) return C80_QUERY_BAD;
+         if(c80_read(io,C80_GLO)==0xffffffffu || (c80_read(io,C80_GLO)&C80_DOWNLOAD_MODE))
+             return C80_MODE_REFUSED;
+     } else if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+     len=c80_command(io->pool->command[slot],cid,body,bytes,sequence);
++    if(cid==0xed && r->phase==21) {
++        io->pool->command[slot][38]=1; io->pool->command[slot][41]=0x21;
++    }
++    if(cid==0xed && r->phase==22) io->pool->command[slot][41]=0x9b;
+     d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+     io->dma_order(io->context,1);
+@@ -309,7 +356,7 @@
+         }
+         if(!rx) {
+             rc=c80_receive(io,r,sequence,cid==0x10?4:cid==0xed?0xed:1,reply);
+-            if(rc==C80_RX_BAD || rc==C80_QUERY_BAD) return rc;
++            if(rc && rc!=C80_RX_TIMEOUT) return rc;
+             if(!rc) rx=1;
+         }
+         if(rx && tx) return 0;
+@@ -490,6 +537,33 @@
+     if(irq_rc) return irq_rc;
+     return r->counter_query_valid?0:C80_QUERY_BAD;
+ }
++static c80_u32 c80_nvm_snapshot(struct c80_io *io,struct c80_result *r)
++{
++    c80_u32 i,rc;
++    r->nvm_attempted=1;
++    rc=io->nvm_read(io->context,io->pool->nvm_payload+4,C80_NVM_BYTES,&r->nvm_radio_crc);
++    if(rc || r->nvm_radio_crc!=C80_RADIO_CRC ||
++       c80_get16(io->pool->nvm_payload+4)!=0x7626) return C80_NVM_BAD_SOURCE;
++    r->nvm_raw_crc=c80_crc(io->pool->nvm_payload+4,C80_NVM_BYTES);
++    for(i=C80_NVM_COPY_BYTES;i<C80_NVM_BYTES;++i) io->pool->nvm_payload[4+i]=0;
++    r->nvm_upload_crc=c80_crc(io->pool->nvm_payload+4,C80_NVM_BYTES);
++    io->pool->nvm_payload[0]=1; io->pool->nvm_payload[1]=1;
++    c80_put16(io->pool->nvm_payload+2,C80_NVM_BYTES);
++    r->nvm_valid=1; return 0;
++}
++static c80_u32 c80_nvm_roundtrip(struct c80_io *io,struct c80_result *r)
++{
++    c80_u8 body[6]; c80_u32 rc,status=0;
++    c80_stage(io,r,21); r->nvm_set_attempted=1;
++    rc=c80_exchange(io,r,0xed,io->pool->nvm_payload,4+C80_NVM_BYTES,&status);
++    if(rc) return rc;
++    if(!r->nvm_set_valid || status) return C80_NVM_SET_REJECTED;
++    c80_stage(io,r,22); r->nvm_get_attempted=1;
++    body[0]=1; body[1]=1; c80_put16(body+2,0); c80_put16(body+4,C80_NVM_BYTES);
++    rc=c80_exchange(io,r,0xed,body,sizeof(body),&status);
++    if(rc) return rc;
++    return r->nvm_get_valid && r->nvm_equal?0:C80_NVM_BAD_REPLY;
++}
+ static void c80_cleanup(struct c80_io *io,struct c80_result *r)
+ {
+     c80_u32 v,i,j;
+@@ -588,6 +662,13 @@
+        (c80_read(io,0x18002000)&0xffff)!=0x8a00 ||
+        (c80_read(io,0x18002004)&0xffff)!=0x8a00) { r->primary=C80_BAD_ID; return C80_BAD_ID; }
+     if(c80_read(io,0x18002600)==0x1d1e) { r->primary=C80_STALE; return C80_STALE; }
++    /* Snapshot/validate board NVM before MCU release or peripheral writes.
++     * Linux always supplies the ROM MTD reader. Legacy native fault cases
++     * may omit it to isolate the already hardware-proven transport path. */
++    if(io->nvm_read) {
++        rc=c80_nvm_snapshot(io,r);
++        if(rc) { r->primary=rc; return rc; }
++    }
+     for(i=0;i<3;++i) r->controls_before[i]=c80_read(io,c80_controls[i]);
+     c80_stage(io,r,3);
+     for(i=0;i<2;++i) {
+@@ -671,6 +752,7 @@
+     rc=c80_patch(io,r,&fw[4]);
+     if(!rc) rc=c80_main_firmware(io,r,&fw[5]);
+     if(!rc) rc=c80_runtime_query(io,r);
++    if(!rc && r->nvm_valid) rc=c80_nvm_roundtrip(io,r);
+ done:
+     r->primary=rc; c80_cleanup(io,r);
+     return r->critical?r->critical:r->cleanup?C80_RESTORE:rc;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -19,6 +19,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/irq.h>
+ #include <linux/spinlock.h>
++#include <linux/mtd/mtd.h>
+ #include "c80_mcu_core.h"
+ 
+ struct c80_window { resource_size_t base,bytes; void __iomem *va; };
+@@ -37,6 +38,7 @@
+     int irq;
+     raw_spinlock_t irq_lock;
+     bool irq_cpu_on;
++    int nvm_error;
+ };
+ static struct c80_linux *c80_live;
+ static const char *const c80_filenames[6]={
+@@ -90,6 +92,28 @@
+ {
+     struct c80_linux *c=context;
+     dev_info(c->dev,"MCU transport stage%u\n",stage);
++}
++static c80_u32 c80_linux_nvm_read(void *context,c80_u8 *out,c80_u32 bytes,c80_u32 *crc)
++{
++    struct c80_linux *c=context; struct mtd_info *mtd;
++    c80_u8 *sector; size_t done=0; int rc;
++    if(bytes!=C80_NVM_BYTES) { c->nvm_error=-EINVAL; return C80_NVM_BAD_SOURCE; }
++    mtd=get_mtd_device_nm("30000000.flash");
++    if(IS_ERR(mtd)) { c->nvm_error=PTR_ERR(mtd); return C80_NVM_BAD_SOURCE; }
++    if(mtd->type!=MTD_ROM || mtd->size!=0x400000 || (mtd->flags&MTD_WRITEABLE)) {
++        c->nvm_error=-EINVAL; put_mtd_device(mtd); return C80_NVM_BAD_SOURCE;
++    }
++    sector=kmalloc(4096,GFP_KERNEL);
++    if(!sector) { c->nvm_error=-ENOMEM; put_mtd_device(mtd); return C80_NVM_BAD_SOURCE; }
++    rc=mtd_read(mtd,0x3ff000,4096,&done,sector);
++    if(rc || done!=4096) c->nvm_error=rc?rc:-EIO;
++    else {
++        *crc=c80_crc(sector,4096);
++        if(*crc!=C80_RADIO_CRC) c->nvm_error=-EBADMSG;
++        else memcpy(out,sector,C80_NVM_BYTES);
++    }
++    memzero_explicit(sector,4096); kfree(sector); put_mtd_device(mtd);
++    return c->nvm_error?C80_NVM_BAD_SOURCE:0;
+ }
+ static irqreturn_t c80_mcu_irq(int irq,void *context)
+ {
+@@ -171,6 +195,8 @@
+         "mask_at_ready=%08x runtime=%08x cleanup_entry=%08x first_zero=%08x after_stop=%08x before_final=%08x zero_writes=%u\n"
+         "wifi_irq=%d raw_gic=243 spi=211 attempted=%u armed=%u entries=%u events=%u unexpected=%u faults=%08x cpu_started=%u cpu_stopped=%u\n"
+         "irq_mask_before=%08x enabled=%08x after=%08x source_before=%08x cleared=%08x seen=%08x after=%08x ack_writes=%u\n"
++        "nvm_source attempted=%u valid=%u linux_errno=%d radio_crc=%08x raw_crc=%08x upload_crc=%08x bytes=1024 copied=960\n"
++        "nvm_set attempted=%u valid=%u status=%u get_attempted=%u valid=%u ext=%02x source=%u format=%u offset=%u count=%u crc=%08x equal=%u mismatch=%u/%u\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+         r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
+@@ -211,6 +237,10 @@
+         r->mask_main_ready,r->mask_runtime,r->mask_cleanup_entry,r->mask_first_zero,r->mask_after_stop,r->mask_before_final_zero,r->mask_zero_writes,
+         c->irq,r->irq_attempted,r->irq_armed,r->irq_entries,r->irq_events,r->irq_unexpected,r->irq_faults,r->irq_cpu_started,r->irq_cpu_stopped,
+         r->irq_mask_before,r->irq_mask_enable,r->irq_mask_after,r->irq_source_before,r->irq_source_cleared,r->irq_source_seen,r->irq_source_after,r->irq_ack_writes,
++        r->nvm_attempted,r->nvm_valid,c->nvm_error,r->nvm_radio_crc,r->nvm_raw_crc,r->nvm_upload_crc,
++        r->nvm_set_attempted,r->nvm_set_valid,r->nvm_set_status,r->nvm_get_attempted,r->nvm_get_valid,r->nvm_get_ext,
++        r->nvm_get_source,r->nvm_get_format,r->nvm_get_offset,r->nvm_get_count,r->nvm_get_crc,r->nvm_equal,
++        r->nvm_mismatch_valid,r->nvm_mismatch_offset,
+         c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;
+ }
+@@ -245,11 +275,14 @@
+          * stop pins the entire pool for the remaining lifetime of this boot. */
+         if(c->result.critical ||
+            (c->result.dma_started && !c->result.dma_idle)) c->retained=true;
+-        else { dma_free_coherent(c->dev,sizeof(*c->pool),c->pool,c->dma); c->pool=NULL; }
++        else {
++            memzero_explicit(c->pool,sizeof(*c->pool));
++            dma_free_coherent(c->dev,sizeof(*c->pool),c->pool,c->dma); c->pool=NULL;
++        }
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU IRQ route test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU NVM roundtrip test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+@@ -294,7 +327,8 @@
+     c->io=(struct c80_io){.context=c,.read=c80_linux_read,.write=c80_linux_write,
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+-        .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm};
++        .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
++        .nvm_read=c80_linux_nvm_read};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
