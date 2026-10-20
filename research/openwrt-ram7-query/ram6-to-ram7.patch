@@ -1,0 +1,183 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -58,6 +58,7 @@
+     C80_RX_TIMEOUT=13,C80_RX_BAD=14,C80_SEMAPHORE=15,C80_RESTORE=16,
+     C80_RING_PROGRAM=17,C80_DOWNLOAD_STATUS=18,C80_FWDL_TIMEOUT=19,
+     C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,C80_MODE_REFUSED=23,
++    C80_QUERY_BAD=24,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -84,6 +85,9 @@
+     c80_u32 failure_snapshot,failure_phase,failure_ring,failure_slot;
+     c80_u32 failure_cpu,failure_dma,failure_desc[4];
+     c80_u32 failure_glo,failure_mask,failure_source,failure_sync,failure_own;
++    c80_u32 runtime_glo_before,runtime_glo_after,last_event_ext;
++    c80_u32 counter_query_attempted,counter_query_valid,counter_category,counter_count,counter_value;
++    c80_u32 mask_main_ready,mask_runtime,mask_cleanup_entry,mask_first_zero,mask_after_stop,mask_before_final_zero,mask_zero_writes;
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -129,6 +133,7 @@
+ static void c80_put32(c80_u8 *p,c80_u32 v)
+ { c80_put16(p,v); c80_put16(p+2,v>>16); }
+ static c80_u32 c80_get16(const c80_u8 *p) { return p[0]|((c80_u32)p[1]<<8); }
++static c80_u32 c80_get32(const c80_u8 *p) { return c80_get16(p)|(c80_get16(p+2)<<16); }
+ /* Exact wire headers reconstructed by executing OEM4026249c. Scatter uses
+  * PQIDf800 and packet format3; ordinary commands PQID8000/format2.
+  * Payload/packet storage is coherent, never reused while hardware owns it. */
+@@ -141,6 +146,8 @@
+     c80_put32(p+4,scatter?0x0300a000:0x0200a000);
+     c80_put16(p+32,32+bytes); c80_put16(p+34,scatter?0xf800:0x8000);
+     p[36]=cid; p[37]=0xa0; p[38]=3; p[39]=sequence;
++    /* Exact OEM40314588/4026249c runtime GET: query0, ext3c, extACK1. */
++    if(cid==0xed) { p[38]=0; p[41]=0x3c; p[43]=1; }
+     for(i=0;i<bytes;++i) p[64+i]=body[i];
+     return n;
+ }
+@@ -168,9 +175,21 @@
+         if(r->last_event_len<9 || r->last_event_len>size-16) return C80_RX_BAD;
+         /* OEM4026410c treats generic EID1 status at event+8; semaphore
+          * EID4 has the same8-byte event prefix. Do not accept unrelated IDs. */
+-        r->last_event_status=p[24];
++        r->last_event_ext=p[20]==0xed?p[24]:0;
++        r->last_event_status=p[20]==0xed?0:p[24];
+         if(r->last_packet_id!=0xe000 || p[20]!=event || p[21]!=sequence) {
+             ++r->rx_ignored; continue;
++        }
++        if(event==0xed) {
++            /* Actual OEM EIDed dispatch uses a12B event header, then
++             * category5/count@4/counters@8. Only the one requested counter
++             * is accepted, with exact event length and strict DMA bounds. */
++            if(p[24]!=0x3c) { ++r->rx_ignored; continue; }
++            if(size<40 || r->last_event_len!=24) return C80_QUERY_BAD;
++            r->counter_category=c80_get16(p+28); r->counter_count=p[32];
++            if(r->counter_category!=5 || r->counter_count!=1) return C80_QUERY_BAD;
++            r->counter_value=c80_get32(p+36); r->counter_query_valid=1;
++            *status=0; return 0;
+         }
+         *status=p[24]; return 0;
+     }
+@@ -212,7 +231,11 @@
+     c80_u32 slot=r->command_submitted,sequence=c80_next_sequence(r),i,rx=0,tx=0,rc,len;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_COMMAND_SLOTS || bytes>192 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+-    if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
++    if(cid==0xed) {
++        if(!r->main_ready || r->phase!=20) return C80_QUERY_BAD;
++        if(c80_read(io,C80_GLO)==0xffffffffu || (c80_read(io,C80_GLO)&C80_DOWNLOAD_MODE))
++            return C80_MODE_REFUSED;
++    } else if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+     len=c80_command(io->pool->command[slot],cid,body,bytes,sequence);
+     d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+@@ -225,8 +248,8 @@
+             io->dma_order(io->context,0); tx=1; ++r->command_completed; ++r->tx_completed;
+         }
+         if(!rx) {
+-            rc=c80_receive(io,r,sequence,cid==0x10?4:1,reply);
+-            if(rc==C80_RX_BAD) return rc;
++            rc=c80_receive(io,r,sequence,cid==0x10?4:cid==0xed?0xed:1,reply);
++            if(rc==C80_RX_BAD || rc==C80_QUERY_BAD) return rc;
+             if(!rc) rx=1;
+         }
+         if(rx && tx) return 0;
+@@ -378,11 +401,38 @@
+     if(!c80_poll(io,C80_SYNC,14,6,2000000,&r->main_sync_after)) return C80_MAIN_NOT_READY;
+     r->main_ready=1; return 0;
+ }
++static c80_u32 c80_runtime_query(struct c80_io *io,struct c80_result *r)
++{
++    c80_u8 body[104]; c80_u32 i,rc,status=0;
++    c80_stage(io,r,19); r->mask_main_ready=c80_read(io,C80_MASK);
++    r->runtime_glo_before=c80_read(io,C80_GLO);
++    if(r->runtime_glo_before==0xffffffffu) return C80_MODE_REFUSED;
++    /* Actual OEM leaves download mode before runtime commands. No scheduler,
++     * RF, calibration, MAC TX/RX enable or other hardware setup is added. */
++    c80_write(io,C80_GLO,r->runtime_glo_before&~C80_DOWNLOAD_MODE);
++    r->runtime_glo_after=c80_read(io,C80_GLO);
++    if(r->runtime_glo_after==0xffffffffu || (r->runtime_glo_after&C80_DOWNLOAD_MODE))
++        return C80_MODE_REFUSED;
++    r->mask_runtime=c80_read(io,C80_MASK); c80_stage(io,r,20);
++    for(i=0;i<sizeof(body);++i) body[i]=0;
++    c80_put16(body,5); body[4]=0; body[5]=1; c80_put32(body+8,1);
++    r->counter_query_attempted=1;
++    rc=c80_exchange(io,r,0xed,body,sizeof(body),&status);
++    if(rc) return rc;
++    return r->counter_query_valid?0:C80_QUERY_BAD;
++}
+ static void c80_cleanup(struct c80_io *io,struct c80_result *r)
+ {
+     c80_u32 v,i,j;
+     c80_stage(io,r,90);
+     if(r->dma_cfg_touched) {
++        /* The entire host mask was verified0 before this experiment owns
++         * the rings/engine. OEM IRQ-disable writes0 to this R/W register.
++         * Mask before stopping, then again after MCU/DMA are quiescent;
++         * record every observed value rather than ignoring a changed bit. */
++        r->mask_cleanup_entry=c80_read(io,C80_MASK);
++        c80_write(io,C80_MASK,0); ++r->mask_zero_writes;
++        r->mask_first_zero=c80_read(io,C80_MASK);
+         v=c80_read(io,C80_GLO); c80_write(io,C80_GLO,v&~5u);
+     }
+     if(r->mcu_released) {
+@@ -398,6 +448,7 @@
+             r->critical=C80_CRITICAL_DMA; return;
+         }
+         r->dma_idle=1;
++        r->mask_after_stop=c80_read(io,C80_MASK);
+     }
+     /* Read-only DMA indices cannot be restored by ordinary register writes.
+      * Restore programmed controls only, retain masked IRQ source; require fresh boot. */
+@@ -423,6 +474,12 @@
+         if(r->control_diff[i]&~c80_control_masks[i]) r->controls_other_changed|=1u<<i;
+     }
+     if(r->ready) {
++        /* Keep the final mask write after restoring GLO/owned controls too:
++         * stopping/resetting or restoring a control may change this mask. */
++        if(r->dma_cfg_touched) {
++            r->mask_before_final_zero=c80_read(io,C80_MASK);
++            c80_write(io,C80_MASK,0); ++r->mask_zero_writes;
++        }
+         r->glo_after=c80_read(io,C80_GLO); r->mask_after=c80_read(io,C80_MASK);
+         r->source_after=c80_read(io,C80_SOURCE);
+         if((r->dma_cfg_touched || r->rings_touched) && (r->glo_after&15)) {
+@@ -544,6 +601,7 @@
+     if(!c80_download_mode(io,r)) { rc=C80_MODE_REFUSED; goto done; }
+     rc=c80_patch(io,r,&fw[4]);
+     if(!rc) rc=c80_main_firmware(io,r,&fw[5]);
++    if(!rc) rc=c80_runtime_query(io,r);
+ done:
+     r->primary=rc; c80_cleanup(io,r);
+     return r->critical?r->critical:r->cleanup?C80_RESTORE:rc;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -118,6 +118,9 @@
+         "failure_snapshot=%u phase=%u ring=%u slot=%u cpu=%08x dma=%08x\n"
+         "failure_desc=%08x/%08x/%08x/%08x\n"
+         "failure_glo=%08x mask=%08x source=%08x sync=%08x own=%08x\n"
++        "runtime_glo_before=%08x after=%08x event_ext=%02x\n"
++        "counter_query_attempted=%u valid=%u category=%u count=%u value=%08x\n"
++        "mask_at_ready=%08x runtime=%08x cleanup_entry=%08x first_zero=%08x after_stop=%08x before_final=%08x zero_writes=%u\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+         r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
+@@ -153,6 +156,9 @@
+         r->failure_cpu,r->failure_dma,
+         r->failure_desc[0],r->failure_desc[1],r->failure_desc[2],r->failure_desc[3],
+         r->failure_glo,r->failure_mask,r->failure_source,r->failure_sync,r->failure_own,
++        r->runtime_glo_before,r->runtime_glo_after,r->last_event_ext,
++        r->counter_query_attempted,r->counter_query_valid,r->counter_category,r->counter_count,r->counter_value,
++        r->mask_main_ready,r->mask_runtime,r->mask_cleanup_entry,r->mask_first_zero,r->mask_after_stop,r->mask_before_final_zero,r->mask_zero_writes,
+         c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;
+ }
+@@ -191,7 +197,7 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU main firmware test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU runtime query test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
