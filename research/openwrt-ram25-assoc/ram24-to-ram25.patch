@@ -1,0 +1,413 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -12,7 +12,7 @@
+ typedef unsigned char c80_u8;
+ typedef unsigned long long c80_u64;
+ #define C80_TX_N 128u
+-#define C80_COMMAND_SLOTS 27u
++#define C80_COMMAND_SLOTS 29u
+ #define C80_COMMAND_BYTES 1152u
+ #define C80_NVM_BYTES 1024u
+ #define C80_NVM_COPY_BYTES 960u
+@@ -50,7 +50,9 @@
+     c80_u8 beacon_body[528]; /* CPU scratch only, copied to unique TX slot. */
+     struct c80_desc auth_tx[C80_AUTH_N] __attribute__((aligned(16)));
+     c80_u8 auth_header[64] __attribute__((aligned(16)));
+-    c80_u8 auth_frame[32] __attribute__((aligned(16))); /* one pinned30-byte reply */
++    c80_u8 auth_frame[32] __attribute__((aligned(16)));
++    c80_u8 assoc_header[64] __attribute__((aligned(16)));
++    c80_u8 assoc_frame[48] __attribute__((aligned(16))); /* one pinned30-byte reply */
+ 
+ };
+ struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
+@@ -78,6 +80,7 @@
+     c80_u32 bss_period_test; /* Match BASIC timing to beacon/SYNC100TU/DTIM1. */
+     c80_u32 rx1_rearm_test,management_rx_test; /* Bounded event return and client RX counters. */
+     c80_u32 rx1_packet_test; /* Classify RX1 descriptors before MCU event parsing. */
++    c80_u32 assoc_reply_test; /* One STA/WTBL lifecycle + one association response. */
+     c80_u32 auth_reply_test; /* At most one open-auth response; no association/data. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+@@ -95,7 +98,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+-    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,C80_RX1_NOTIFY_BAD=58,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,C80_RX1_NOTIFY_BAD=58,C80_ASSOC_BAD_PREREQ=59,C80_STA_BAD_REPLY=60,C80_STA_REJECTED=61,C80_ASSOC_PUBLISH=62,C80_ASSOC_TIMEOUT=63,C80_ASSOC_BAD_DESC=64,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -188,7 +191,14 @@
+     c80_u32 txfree_reports,txfree_valid,txfree_bad,txfree_other,txfree_tokens,txfree_ours;
+     c80_u32 txfree_foreign,txfree_before_submit,txfree_duplicate,auth_token_returned;
+     c80_u32 txfree_dw0,txfree_dw1,txfree_bytes,txfree_report_type,txfree_count,txfree_version;
+-    c80_u64 auth_submit_us;
++    c80_u64 auth_submit_us,assoc_submit_us,assoc_window_start_us;
++    c80_u32 assoc_captured,assoc_duplicate,assoc_late,assoc_request_bad,assoc_request_cap,assoc_listen,assoc_rate_mask;
++    c80_u32 assoc_submitted,assoc_dma_done,assoc_token_returned,assoc_free_before,assoc_free_duplicate;
++    c80_u32 assoc_ctrl,assoc_cpu_readback,assoc_dma_index,assoc_wait_us,assoc_polls,assoc_pre_base,assoc_pre_count;
++    c80_u32 assoc_data_candidates,assoc_null_candidates,assoc_complete;
++    c80_u32 sta_waiting,sta_attempted[2],sta_valid[2],sta_status[2],sta_echo[2],sta_ext[2];
++    c80_u32 sta_event_bytes[2],sta_dma_bytes[2],sta_tail[2],sta_wait_us[2],sta_polls[2];
++    c80_u32 sta_meta_valid[2],sta_meta_bss[2],sta_meta_wcid[2],sta_meta_count[2],sta_meta_muar[2];
+     struct c80_management_counts management[2]; /* control38, beacon37; no packet/address saved. */
+ 
+ 
+@@ -363,6 +373,55 @@
+     if(r->auth_wait_us>=1000000) return C80_AUTH_TIMEOUT;
+     return 0;
+ }
++/* A single bounded legacy/open association candidate. Parse only mandatory
++ * first SSID and Supported Rates IEs, never assume trailing FCS is stripped. */
++static void c80_assoc_capture(struct c80_io *io,struct c80_result *r,const c80_u8 *p,c80_u32 bytes)
++{
++    static const c80_u8 ssid[9]={'C','8','0','-','R','A','M','1','6'};
++    static const c80_u8 txd[32]={0x44,0x00,0x00,0x40,0x01,0xcc,0x00,0x00,0x00,0x00,0x00,0xa0,0x00,0x38,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x20,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x01,0x00};
++    c80_u32 i,pos,len,rate,mask=0,fc;c80_u64 now;c80_u8 *f=io->pool->assoc_frame,*h=io->pool->assoc_header;
++    if(!io->assoc_reply_test || r->phase!=37 || !r->auth_submitted || !r->auth_dma_done || bytes<28) return;
++    fc=c80_get16(p);
++    if((fc&0xff) || (fc&0xc700) || (p[22]&15) ||
++       !c80_mac_equal(p+4,io->pool->nvm_payload+8) || !c80_mac_equal(p+16,p+4) ||
++       !c80_mac_equal(p+10,io->pool->auth_frame+4)) return;
++    if(r->assoc_captured) { ++r->assoc_duplicate;return; }
++    now=io->time_us(io->context);
++    if(now<r->assoc_window_start_us || now-r->assoc_window_start_us>28000000) { ++r->assoc_late;return; }
++    if(!r->auth_ring_programmed || !r->nvm_equal || !r->devinfo_mac_valid || !r->bss_valid[0] || r->bss_status[0] ||
++       !r->radio_valid[3] || r->radio_status[3] || !r->beacon_valid[1] || r->beacon_status[1]) return;
++    r->assoc_request_cap=c80_get16(p+24);r->assoc_listen=c80_get16(p+26);
++    if((r->assoc_request_cap&0x13)!=1 || !r->assoc_listen) { ++r->assoc_request_bad;return; }
++    if(bytes<39 || p[28]!=0 || p[29]!=9) { ++r->assoc_request_bad;return; }
++    for(i=0;i<9;++i) if(p[30+i]!=ssid[i]) { ++r->assoc_request_bad;return; }
++    pos=39;
++    if(bytes-pos<2 || p[pos]!=1 || !(len=p[pos+1]) || len>8 || len>bytes-pos-2) { ++r->assoc_request_bad;return; }
++    for(i=0;i<len;++i) {
++        rate=p[pos+2+i]&127;
++        if(rate==2) mask|=1;else if(rate==4) mask|=2;else if(rate==11) mask|=4;else if(rate==22) mask|=8;
++    }
++    r->assoc_rate_mask=mask;
++    if(mask!=15) { ++r->assoc_request_bad;return; }
++    for(i=0;i<48;++i) f[i]=0;
++    c80_put16(f,0x10);c80_put16(f+2,304);c80_put16(f+22,16);
++    for(i=0;i<6;++i) { f[4+i]=p[10+i];f[10+i]=f[16+i]=io->pool->nvm_payload[8+i]; }
++    c80_put16(f+24,1);c80_put16(f+28,0xc001); /* ESS/open, success0, AID1 */
++    f[30]=1;f[31]=4;f[32]=0x82;f[33]=0x84;f[34]=0x8b;f[35]=0x96;
++    for(i=0;i<64;++i) h[i]=i<32?txd[i]:0;
++    c80_put16(h+32,0x8001);c80_put32(h+40,c80_dma_address(io,f));c80_put16(h+44,0x8024);
++    r->assoc_captured=1;
++}
++static void c80_assoc_data_observe(struct c80_io *io,struct c80_result *r,const c80_u8 *p,c80_u32 bytes)
++{
++    c80_u32 fc,sub,header;
++    if(!io->assoc_reply_test || r->phase!=37 || !r->assoc_submitted || bytes<24) return;
++    fc=c80_get16(p);sub=(fc>>4)&15;header=(sub&8)?26:24;
++    if((fc&15)!=8 || (fc&0xc700)!=0x100 || (p[22]&15) || bytes<header ||
++       !c80_mac_equal(p+4,io->pool->nvm_payload+8) || !c80_mac_equal(p+10,io->pool->auth_frame+4)) return;
++    if(sub==4 || sub==12) ++r->assoc_null_candidates;
++    else if(bytes>header) ++r->assoc_data_candidates;
++}
++
+ static void c80_management_receive(struct c80_io *io,struct c80_result *r,
+                                     const c80_u8 *p,c80_u32 bytes)
+ {
+@@ -409,6 +468,7 @@
+         if(bytes<need) { ++m->short_header; return; }
+         if(sub==0) { ++m->assoc_to_us;
+             if(io->auth_reply_test && r->auth_submitted && c80_mac_equal(p+10,io->pool->auth_frame+4)) ++r->auth_same_peer_assoc;
++            c80_assoc_capture(io,r,p,bytes);
+         }
+         else if(sub==2) ++m->reassoc_to_us;
+         else if(sub==10) ++m->disassoc_to_us;
+@@ -449,6 +509,7 @@
+         if(p[6]&0x80) { ++r->radio_rx_translated; goto recycle; }
+         ++r->radio_raw_frames;
+         c80_management_receive(io,r,p+offset,total-offset);
++        c80_assoc_data_observe(io,r,p+offset,total-offset);
+         /* Count only complete raw management-beacon header candidates.
+          * No addresses/SSID/payload are saved or printed. FCS not verified. */
+         if(total-offset>=36 && (c80_get16(p+offset)&0xfc)==0x80 &&
+@@ -493,6 +554,20 @@
+         ++r->rx_ignored; return C80_RX_TIMEOUT;
+     }
+     if(event==0xed) {
++        if(r->sta_waiting) {
++            c80_u32 k=r->sta_waiting-1;
++            if(k>1) return C80_STA_BAD_REPLY;
++            if(p[24]!=0 && p[24]!=0x25) { ++r->rx_ignored;return C80_RX_TIMEOUT; }
++            r->sta_ext[k]=p[24];r->sta_event_bytes[k]=r->last_event_len;r->sta_dma_bytes[k]=size;
++            if(size<44 || r->last_event_len<28) return C80_STA_BAD_REPLY;
++            r->sta_echo[k]=p[28];r->sta_status[k]=c80_get32(p+32);r->sta_tail[k]=r->last_event_len-28;
++            if(r->sta_echo[k]!=0x25) return C80_STA_BAD_REPLY;
++            /* Actual OEM callback consumes status only. Remaining base
++             * metadata is observed, not assumed to be a proven TPOS ABI. */
++            r->sta_meta_valid[k]=1;r->sta_meta_bss[k]=p[36];r->sta_meta_wcid[k]=p[37];
++            r->sta_meta_count[k]=c80_get16(p+38);r->sta_meta_muar[k]=p[40];
++            r->sta_valid[k]=1;*status=r->sta_status[k];return 0;
++        }
+         if(r->phase==39 || r->phase==40) {
+             c80_u32 k=r->phase-39;
+             if(p[24]!=0x3c) { ++r->rx_ignored; return C80_RX_TIMEOUT; }
+@@ -661,7 +736,7 @@
+  * is retained and no completion here releases the pinned payload pool. */
+ static c80_u32 c80_rx1_non_event(struct c80_result *r,const c80_u8 *p,c80_u32 size,c80_u32 type)
+ {
+-    c80_u32 dw0,dw1,count,stride,bytes,i,ours=0,foreign=0;
++    c80_u32 dw0,dw1,count,stride,bytes,i,ours=0,peer=0,foreign=0;
+     ++r->rx1_non_event;r->rx1_last_type=type;r->rx1_last_bytes=size;
+     r->rx1_last_dw0=c80_get32(p);
+     if(type!=6) { ++r->rx1_unknown;return C80_RX_TIMEOUT; }
+@@ -683,13 +758,19 @@
+     for(i=0;i<count;++i) {
+         c80_u32 token=c80_get16(p+8+i*stride);
+         if(token>4095) goto bad;
+-        if(!token) ++ours;else ++foreign;
+-    }
+-    ++r->txfree_valid;r->txfree_tokens+=count;r->txfree_foreign+=foreign;
++        if(!token) ++ours;else if(token==1) ++peer;else ++foreign;
++    }
++    ++r->txfree_valid;r->txfree_tokens+=count;r->txfree_foreign+=foreign+(r->assoc_submitted?0:peer);
+     if(!r->auth_submitted) r->txfree_before_submit+=ours;
+     else if(ours) {
+         r->txfree_duplicate+=ours-(r->auth_token_returned?0:1);
+         r->txfree_ours+=ours;r->auth_token_returned=1;
++    }
++    if(!r->assoc_submitted) r->assoc_free_before+=peer;
++    else if(peer) {
++        r->assoc_free_duplicate+=peer-(r->assoc_token_returned?0:1);
++        r->txfree_duplicate+=peer-(r->assoc_token_returned?0:1);
++        r->txfree_ours+=peer;r->assoc_token_returned=1;
+     }
+     return C80_RX_TIMEOUT;
+ bad:
+@@ -765,7 +846,9 @@
+                                 c80_u64 now,c80_u32 polls)
+ {
+     c80_u32 elapsed=now<start?0:now-start>0xffffffffu?0xffffffffu:(c80_u32)(now-start);
+-    if(r->phase==21) {
++    if(r->sta_waiting && r->sta_waiting<=2) {
++        r->sta_wait_us[r->sta_waiting-1]=elapsed;r->sta_polls[r->sta_waiting-1]=polls;
++    } else if(r->phase==21) {
+         r->nvm_set_wait_us=elapsed; r->nvm_set_polls=polls;
+         if(now<start) r->nvm_wait_clock_backwards|=1;
+     } else if(r->phase==22) {
+@@ -795,13 +878,14 @@
+     c80_u32 radio=cid==0xed && ((r->phase>=27 && r->phase<=30) || r->phase==32);
+     c80_u32 beacon=cid==0xed && r->phase>=33 && r->phase<=36;
+     c80_u32 tsf=cid==0xed && (r->phase==39 || r->phase==40);
+-    c80_u32 timeout=nvm?C80_NVM_WAIT_US:(beacon || tsf)?6000000u:radio?(r->phase==28?5000000u:6000000u):devinfo?C80_DEVINFO_WAIT_US:2000000u;
+-    c80_u32 poll_us=(nvm || devinfo || radio || beacon || tsf)?C80_NVM_POLL_US:50u;
+-    c80_u32 max_polls=(nvm || devinfo || radio || beacon || tsf)?timeout/poll_us:C80_MAX_POLLS;
++    c80_u32 sta=cid==0xed && r->sta_waiting && r->sta_waiting<=2 && io->assoc_reply_test && r->phase==37;
++    c80_u32 timeout=sta?1000000u:nvm?C80_NVM_WAIT_US:(beacon || tsf)?6000000u:radio?(r->phase==28?5000000u:6000000u):devinfo?C80_DEVINFO_WAIT_US:2000000u;
++    c80_u32 poll_us=(nvm || devinfo || radio || beacon || tsf || sta)?C80_NVM_POLL_US:50u;
++    c80_u32 max_polls=(nvm || devinfo || radio || beacon || tsf || sta)?timeout/poll_us:C80_MAX_POLLS;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_COMMAND_SLOTS || bytes>C80_COMMAND_BYTES-64 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+     if(cid==0xed) {
+-        if(!r->main_ready || r->phase<20 || (r->phase>36 && !tsf)) return C80_QUERY_BAD;
++        if(!r->main_ready || r->phase<20 || (r->phase>36 && !tsf && !sta)) return C80_QUERY_BAD;
+         if(c80_read(io,C80_GLO)==0xffffffffu || (c80_read(io,C80_GLO)&C80_DOWNLOAD_MODE))
+             return C80_MODE_REFUSED;
+     } else if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+@@ -809,6 +893,7 @@
+     if(cid==0xed && r->phase==21) {
+         io->pool->command[slot][38]=1; io->pool->command[slot][41]=0x21;
+     }
++    if(sta) io->pool->command[slot][41]=0x25;
+     if(cid==0xed && r->phase==22) io->pool->command[slot][41]=0x9b;
+     /* OEM flags0x27 encode query0 here, despite the mutating command name.
+      * Preserve the ARM-produced header; don't infer SetQuery from its name. */
+@@ -833,7 +918,7 @@
+         /* NVM follows OEM60s, DEVINFO the OEM6s default. A second iteration
+          * cap also bounds a frozen clock; rollback fails without unsigned
+          * wrap. No command is retried or resent while waiting. */
+-        if(nvm || devinfo || radio || beacon || tsf) {
++        if(nvm || devinfo || radio || beacon || tsf || sta) {
+             now=io->time_us(io->context);
+             if(now<start || now-start>=timeout) break;
+         }
+@@ -860,6 +945,58 @@
+     c80_transport_snapshot(io,r,15,slot,d);
+     return tx?C80_RX_TIMEOUT:C80_TX_TIMEOUT;
+ }
++/* Actual OEM BASIC/WTBL profile from trace-stock-station.py. Synthetic
++ * template MACs are zeroed; fill only from the validated captured peer. */
++static c80_u32 c80_sta_exchange(struct c80_io *io,struct c80_result *r,c80_u32 off)
++{
++    static const c80_u8 on[244]={0x00,0x01,0x02,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x14,0x00,0x01,0x00,0x01,0x00,0x02,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x03,0x00,0x0d,0x00,0xd8,0x00,0x01,0x01,0x0a,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x14,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,0x00,0x0c,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,0x00,0x02,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x09,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x0d,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x03,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x05,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x06,0x00,0x08,0x00,0x00,0x01,0x00,0x00,0x0c,0x00,0x0c,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
++    static const c80_u8 del[28]={0x00,0x01,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x14,0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x00};
++    c80_u8 body[244];c80_u32 i,n=off?28:244,rc,status=~0u;
++    if(!io->assoc_reply_test || r->phase!=37 || !r->assoc_captured || !r->auth_token_returned ||
++       !r->auth_dma_done || !r->auth_submitted || (off && (!r->sta_valid[0] || r->sta_status[0]))) return C80_ASSOC_BAD_PREREQ;
++    for(i=0;i<n;++i) body[i]=off?del[i]:on[i];
++    for(i=0;i<6;++i) { body[20+i]=io->pool->auth_frame[4+i];if(!off) body[44+i]=body[20+i]; }
++    r->sta_waiting=off+1;r->sta_attempted[off]=1;
++    rc=c80_exchange(io,r,0xed,body,n,&status);r->sta_waiting=0;
++    if(rc) return rc;
++    if(!r->sta_valid[off] || status) return C80_STA_REJECTED;
++    return 0;
++}
++static c80_u32 c80_assoc_step(struct c80_io *io,struct c80_result *r)
++{
++    c80_u64 now;struct c80_desc *d=&io->pool->auth_tx[1];c80_u32 rc;
++    if(!io->assoc_reply_test || !r->assoc_captured || r->assoc_dma_done) return 0;
++    if(r->phase!=37 || !r->auth_ring_programmed || !r->auth_submitted || !r->auth_dma_done) return C80_ASSOC_BAD_PREREQ;
++    now=io->time_us(io->context);
++    if(now<r->assoc_window_start_us) return C80_BAD_TIMER;
++    if(now-r->assoc_window_start_us>29000000) return C80_ASSOC_TIMEOUT;
++    if(!r->auth_token_returned) return 0;
++    if(!r->sta_attempted[0]) { rc=c80_sta_exchange(io,r,0);if(rc) return rc; }
++    if(!r->sta_valid[0] || r->sta_status[0]) return C80_ASSOC_BAD_PREREQ;
++    now=io->time_us(io->context);
++    if(!r->assoc_submitted) {
++        if(now<r->assoc_window_start_us) return C80_BAD_TIMER;
++        if(now-r->assoc_window_start_us>29000000) return C80_ASSOC_TIMEOUT;
++        r->assoc_pre_base=c80_read(io,C80_AUTH_RING);r->assoc_pre_count=c80_read(io,C80_AUTH_RING+4);
++        if(r->assoc_pre_base!=c80_dma_address(io,io->pool->auth_tx) || r->assoc_pre_count!=C80_AUTH_N ||
++           c80_read(io,C80_AUTH_RING+8)!=1 || c80_read(io,C80_AUTH_RING+12)!=1 ||
++           d->ctrl!=C80_DONE || d->addr || d->addr1 || d->info) return C80_ASSOC_BAD_DESC;
++        d->addr=c80_dma_address(io,io->pool->assoc_header);d->addr1=c80_dma_address(io,io->pool->assoc_frame);d->info=0;
++        d->ctrl=C80_LS0|(64u<<16);io->dma_order(io->context,1);
++        r->assoc_submitted=1;r->assoc_submit_us=now;
++        c80_write(io,C80_AUTH_RING+8,2);r->assoc_cpu_readback=c80_read(io,C80_AUTH_RING+8);
++        if(r->assoc_cpu_readback!=2) return C80_ASSOC_PUBLISH;
++    }
++    if(now<r->assoc_submit_us) return C80_BAD_TIMER;
++    r->assoc_wait_us=now-r->assoc_submit_us>0xffffffffu?0xffffffffu:(c80_u32)(now-r->assoc_submit_us);++r->assoc_polls;
++    r->assoc_ctrl=d->ctrl;r->assoc_dma_index=c80_read(io,C80_AUTH_RING+12);
++    if(r->assoc_dma_index<1 || r->assoc_dma_index>2 || (r->assoc_ctrl&~C80_DONE)!=(C80_LS0|(64u<<16)) ||
++       d->addr!=c80_dma_address(io,io->pool->assoc_header) || d->addr1!=c80_dma_address(io,io->pool->assoc_frame) || d->info) return C80_ASSOC_BAD_DESC;
++    if((r->assoc_ctrl&C80_DONE) && r->assoc_dma_index==2) { io->dma_order(io->context,0);r->assoc_dma_done=1;return 0; }
++    if(r->assoc_wait_us>=1000000) return C80_ASSOC_TIMEOUT;
++    return 0;
++}
++
+ static c80_u32 c80_semaphore(struct c80_io *io,struct c80_result *r,
+                              c80_u32 operation,c80_u32 *reply)
+ {
+@@ -1129,6 +1266,7 @@
+     struct c80_watch_window *w=&r->watch[index];
+     c80_u64 start=io->time_us(io->context),now; c80_u32 i,rc,status=0,slot;
+     w->started=1;
++    if(index==1 && io->assoc_reply_test) r->assoc_window_start_us=start;
+     for(i=0;i<=30000;++i) {
+         now=io->time_us(io->context);
+         if(now<start) return C80_BAD_TIMER;
+@@ -1145,9 +1283,11 @@
+         w->last_good_us=w->elapsed_us;
+         rc=c80_receive(io,r,0,0,&status);
+         if(rc!=C80_RX_TIMEOUT) return rc?rc:C80_BEACON_BAD_REPLY;
+-        if(index==1) { rc=c80_auth_poll(io,r);if(rc) return rc; }
++        if(index==1) { rc=c80_auth_poll(io,r);if(rc) return rc;rc=c80_assoc_step(io,r);if(rc) return rc; }
+         if(w->elapsed_us>=30000000) {
+             if(index==1 && io->auth_reply_test && r->auth_submitted && !r->auth_dma_done) return C80_AUTH_TIMEOUT;
++            if(index==1 && io->assoc_reply_test && r->assoc_captured &&
++               (!r->assoc_submitted || !r->assoc_dma_done || !r->assoc_token_returned)) return C80_ASSOC_TIMEOUT;
+             w->complete=1; return 0;
+         }
+         if(i<30000) io->delay_us(io->context,1000);
+@@ -1201,6 +1341,10 @@
+                 r->beacon_window_us=r->watch[1].elapsed_us;
+                 r->beacon_window_polls=r->watch[1].samples?r->watch[1].samples-1:0;
+                 if(rc) return rc;
++                if(io->assoc_reply_test && r->sta_attempted[0]) {
++                    rc=c80_sta_exchange(io,r,1);if(rc) return rc;
++                    r->assoc_complete=r->assoc_dma_done && r->assoc_token_returned;
++                }
+                 rc=c80_state_capture(io,r,3); if(rc) return rc;
+                 rc=c80_state_tsf(io,r,1); if(rc) return rc;
+                 continue;
+@@ -1410,6 +1554,7 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->assoc_reply_test && (!io->auth_reply_test || !io->rx1_packet_test)) { r->primary=C80_ASSOC_BAD_PREREQ;return r->primary; }
+     if(io->auth_reply_test && (!io->management_rx_test || !io->rx1_rearm_test || !io->bss_period_test || !io->beacon_state_test ||
+        !io->rx0_rearm_test || !io->watch_test || !io->beacon_test || !io->radio_test || !io->devinfo_test || !io->bss_test)) {
+         r->primary=C80_AUTH_BAD_PREREQ;return r->primary;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -358,7 +358,7 @@
+     struct c80_linux *c=c80_live;struct c80_result *r;struct c80_management_counts *m;ssize_t n=0;unsigned k,i;
+     if(!c) return -ENODEV;
+     mutex_lock(&c->lock);r=&c->result;
+-    n+=sysfs_emit_at(buf,n,"enabled=%u responses_submitted=%u client_association_supported=0 FCS_verified=0 packet_or_address_saved=0\n",c->io.management_rx_test,r->auth_submitted);
++    n+=sysfs_emit_at(buf,n,"enabled=%u responses_submitted=%u full_client_stack=0 FCS_verified=0 packet_or_address_saved=0\n",c->io.management_rx_test,r->auth_submitted);
+     for(k=0;k<2;++k) {
+         const char *name=k?"beacon":"control";m=&r->management[k];
+         n+=sysfs_emit_at(buf,n,"%s headers=%u short=%u bad_fc=%u peer_bad=%u protected_ordered=%u fragments=%u to_us=%u\n",
+@@ -392,7 +392,7 @@
+         "ring_saved=%u touched=%u programmed=%u restore_bad=%x CPU_readback=%u DMA_index=%u ctrl=%08x polls=%u wait_us=%u\n"
+         "pre_submit_BASE=%08x MAX=%u\nring_before=%08x/%08x/%08x/%08x after=%08x/%08x/%08x/%08x\n"
+         "same_peer_assoc_candidates=%u auth_transaction=2 status=0 WCID=0 hardware_ring=5 LMAC_queue=16 PHY=CCK1 packet_format=0 token=0 TXD=32 TXP=32 frame_bytes=30\n"
+-        "buffers_retained_until_reboot_after_submit=1 air_or_ACK_confirmed=0 association_supported=0 packet_or_address_in_report=0\n",
++        "buffers_retained_until_reboot_after_submit=1 air_or_ACK_confirmed=0 full_client_stack=0 packet_or_address_in_report=0\n",
+         c->io.auth_reply_test,r->auth_captured,r->auth_submitted,r->auth_dma_done,r->auth_duplicate,r->auth_late,
+         r->auth_ring_saved,r->auth_ring_touched,r->auth_ring_programmed,r->auth_ring_restore_bad,r->auth_cpu_readback,r->auth_dma_index,r->auth_ctrl,r->auth_polls,r->auth_wait_us,
+         r->auth_pre_base,r->auth_pre_count,r->auth_ring_before[0],r->auth_ring_before[1],r->auth_ring_before[2],r->auth_ring_before[3],
+@@ -411,7 +411,24 @@
+         r->txfree_reports,r->txfree_valid,r->txfree_bad,r->txfree_other,r->txfree_tokens,r->txfree_ours,r->txfree_foreign,r->txfree_before_submit,r->txfree_duplicate,r->auth_token_returned);
+     n+=sysfs_emit_at(buf,n,"last_TX_free_DMA_bytes=%u DW0=%08x DW1=%08x report_type=%u count=%u version=%u\n",
+         r->txfree_bytes,r->txfree_dw0,r->txfree_dw1,r->txfree_report_type,r->txfree_count,r->txfree_version);
+-    n+=sysfs_emit_at(buf,n,"packet_or_address_saved=0 pool_release_on_report=0 RF_ACK_confirmed=0 association_supported=0\n");
++    n+=sysfs_emit_at(buf,n,"packet_or_address_saved=0 pool_release_on_report=0 RF_ACK_confirmed=0 full_client_stack=0\n");
++    mutex_unlock(&c->lock);return n;
++}
++static ssize_t association_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n=0;unsigned i;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock);r=&c->result;
++    n+=sysfs_emit_at(buf,n,"enabled=%u maximum_responses=1 captured=%u duplicate=%u late=%u request_bad=%u cap=%04x listen=%u CCK_mask=%x\n",
++        c->io.assoc_reply_test,r->assoc_captured,r->assoc_duplicate,r->assoc_late,r->assoc_request_bad,r->assoc_request_cap,r->assoc_listen,r->assoc_rate_mask);
++    for(i=0;i<2;++i) n+=sysfs_emit_at(buf,n,"STA_%s attempted=%u valid=%u status=%08x echo=%02x ext=%02x event=%u DMA=%u tail=%u wait_us=%u polls=%u meta=%u BSS=%u WCID=%u TLVs=%u MUAR=%u\n",
++        i?"delete":"create",r->sta_attempted[i],r->sta_valid[i],r->sta_status[i],r->sta_echo[i],r->sta_ext[i],r->sta_event_bytes[i],r->sta_dma_bytes[i],r->sta_tail[i],r->sta_wait_us[i],r->sta_polls[i],r->sta_meta_valid[i],r->sta_meta_bss[i],r->sta_meta_wcid[i],r->sta_meta_count[i],r->sta_meta_muar[i]);
++    n+=sysfs_emit_at(buf,n,"submitted=%u DMA_header_done=%u token1_returned=%u CPU_readback=%u DMA_index=%u ctrl=%08x wait_us=%u polls=%u pre_BASE=%08x MAX=%u\n",
++        r->assoc_submitted,r->assoc_dma_done,r->assoc_token_returned,r->assoc_cpu_readback,r->assoc_dma_index,r->assoc_ctrl,r->assoc_wait_us,r->assoc_polls,r->assoc_pre_base,r->assoc_pre_count);
++    n+=sysfs_emit_at(buf,n,"token1_before_submit=%u duplicate=%u lifecycle_complete=%u same_peer_data_candidates=%u null_candidates=%u\n",
++        r->assoc_free_before,r->assoc_free_duplicate,r->assoc_complete,r->assoc_data_candidates,r->assoc_null_candidates);
++    n+=sysfs_emit_at(buf,n,"WCID=1 AID=1 token=1 ring_slot=1 PHY=CCK1 frame_bytes=36 firmware_packets=create_BASIC_WTBL_delete_BASIC pool_pinned_until_reboot=1\n");
++    n+=sysfs_emit_at(buf,n,"peer_address_or_packet_logged=0 FCS_verified=0 RF_ACK_confirmed=0 data_path_or_DHCP_supported=0\n");
+     mutex_unlock(&c->lock);return n;
+ }
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+@@ -446,7 +463,7 @@
+          * After ANY management submission keep the complete pool unchanged
+          * until system reset, even when MCU/WPDMA stop checks passed.
+          * Critical/failed DMA stop also pins every allocation as before. */
+-        if(c->result.auth_submitted || c->result.critical ||
++        if(c->result.auth_submitted || c->result.assoc_submitted || c->result.critical ||
+            (c->result.dma_started && !c->result.dma_idle)) c->retained=true;
+         else {
+             memzero_explicit(c->pool,sizeof(*c->pool));
+@@ -455,11 +472,12 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU auth-response/RX1-completion test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU single association-response test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+ static struct kobj_attribute reply_attr=__ATTR_RO(reply);
++static struct kobj_attribute association_attr=__ATTR_RO(association);
+ static struct kobj_attribute completion_attr=__ATTR_RO(completion);
+ static struct kobj_attribute mgmt_attr=__ATTR_RO(mgmt);
+ static struct kobj_attribute events_attr=__ATTR_RO(events);
+@@ -469,7 +487,7 @@
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&completion_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -509,7 +527,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
