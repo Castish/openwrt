@@ -1,0 +1,100 @@
+{
+  "source_snapshot": "uboot-native-netboot-v1",
+  "files": [
+    {
+      "file": "LICENSES.md",
+      "bytes": 1372,
+      "original_source_sha256": "6efed544a54b61021ae96324049d47ed8ca4f4f129e727b77648ecf3e98957fc"
+    },
+    {
+      "file": "Set-C80Boot.ps1",
+      "bytes": 2092,
+      "original_source_sha256": "f41747997792908541370a753ae8ad18fc525feb478c0797a657798174b99afd"
+    },
+    {
+      "file": "build.sh",
+      "bytes": 1706,
+      "original_source_sha256": "620ad38d2086fd58f6efd6cfc259a4f5404b0abf629985ea219a77b7dacbd8cb"
+    },
+    {
+      "file": "entry.S",
+      "bytes": 617,
+      "original_source_sha256": "704d2c29c83caf1239887f46ec147a97f55c169c974f1539d406d0559530bf90"
+    },
+    {
+      "file": "hook.ld",
+      "bytes": 197,
+      "original_source_sha256": "b907dd46de0c8927852034fd86065a9876f95a38d721924de60ae72fcdbff310"
+    },
+    {
+      "file": "install-entry.S",
+      "bytes": 349,
+      "original_source_sha256": "bd0366efa8e2db3985356aa6c5540bb075408c0173ededd5c1ba1ee01995c571"
+    },
+    {
+      "file": "install-profile.h",
+      "bytes": 223,
+      "original_source_sha256": "6e632d31743bb764121358063a6d9b2b8ae5698edb474d780ddf407232e31f81"
+    },
+    {
+      "file": "install.c",
+      "bytes": 6225,
+      "original_source_sha256": "d8c31630e12906dfe7adda9fc1c5a0ea8a2714f8ed416f4bf8344935dbe5aae1"
+    },
+    {
+      "file": "install.ld",
+      "bytes": 181,
+      "original_source_sha256": "8ebceb956f3dfd070edd2c4f2fd3f7804d5c705b2e7cb2c2c634797962668089"
+    },
+    {
+      "file": "make-firmware.py",
+      "bytes": 3842,
+      "original_source_sha256": "cbabefbe17a19e7cdabedb12d9543f0c48a8ee8040bfab417afe046958b04ac1"
+    },
+    {
+      "file": "netboot.c",
+      "bytes": 11119,
+      "original_source_sha256": "707274c64cf715314dde12e1738f7956d3644b11db8db32d3b504ee52481bf3c"
+    },
+    {
+      "file": "package.py",
+      "bytes": 2906,
+      "original_source_sha256": "e730eb7b46a7b02caabeab30570a977acecca1c2102c222eb2ad0b5cc62d499b"
+    },
+    {
+      "file": "patch-uboot.py",
+      "bytes": 2886,
+      "original_source_sha256": "6b58bb431ec387d7adf348f9d68b1e15316db729479fbc6f069c1bb952ad9472"
+    },
+    {
+      "file": "verify-artifacts.py",
+      "bytes": 4823,
+      "original_source_sha256": "f1e093cf7e1fc698a953538e30bcba36f7cebb1fe6fa7bd5bf4e24c361d10e87"
+    },
+    {
+      "file": "verify-boot.py",
+      "bytes": 8377,
+      "original_source_sha256": "4c365300ac42aa3390da6fcacc803b9a43bb06d9efd33e0097682187560821f3"
+    },
+    {
+      "file": "verify-installer.py",
+      "bytes": 7790,
+      "original_source_sha256": "9dfa7a0ab29ffd2a93cc884358660b99edd2d9ea8bcfcf10b53a91e515aadcda"
+    },
+    {
+      "file": "verify-native-decompress.py",
+      "bytes": 1862,
+      "original_source_sha256": "8f4ff4d6e083e88f25d6179f331f24ad39f67f3c6dc655f05ce940e6a590756d"
+    },
+    {
+      "file": "verify-native-services.py",
+      "bytes": 6212,
+      "original_source_sha256": "267c49c9042b7a5169981529da06a743eb26210dda7ff86cf3a9f2f8476dd97c"
+    },
+    {
+      "file": "verify-oem-acceptance.py",
+      "bytes": 4957,
+      "original_source_sha256": "0bd206497c417242cfdc1193cc3fe2f85a47f102183180d94707953636c9d8bf"
+    }
+  ]
+}
