@@ -1,0 +1,30 @@
+{
+  "source_snapshot": "ethernet-irq-probe",
+  "files": [
+    {
+      "file": "LICENSE",
+      "bytes": 1082,
+      "original_source_sha256": "5ea99049fe36140d37cd53389b7d8d1eb6781d96fd2486f2906d50aa29758776"
+    },
+    {
+      "file": "build.sh",
+      "bytes": 730,
+      "original_source_sha256": "26c1bdb520a24bd7ea8911436548010cfad494b711411a65cc5f7ec744379a49"
+    },
+    {
+      "file": "c80-irq-probe.S",
+      "bytes": 8002,
+      "original_source_sha256": "1c663d396665a8d9dde74066d1860d1f2bee80c77649768b39b34057fea1ace7"
+    },
+    {
+      "file": "probe.ld",
+      "bytes": 385,
+      "original_source_sha256": "cf74501d2bf211020140eb6504981670d88a4512ec6d07475d5b8dbd7cb9b523"
+    },
+    {
+      "file": "verify-binary.py",
+      "bytes": 11436,
+      "original_source_sha256": "477b6a58fa7d92fdc4ae2daa739b0c0a099795aa48d55ad83c52bbce8ead4c04"
+    }
+  ]
+}
