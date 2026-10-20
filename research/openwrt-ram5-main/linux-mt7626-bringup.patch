@@ -1,0 +1,2603 @@
+--- a/drivers/power/reset/Kconfig
++++ b/drivers/power/reset/Kconfig
+@@ -315,4 +315,11 @@
+ 	help
+ 	  This driver supports reset or low power mode handling for Mellanox BlueField.
+ 
++config POWER_RESET_C80
++	bool "TP-Link Archer C80 MT7626 system restart"
++	depends on ARCH_MEDIATEK && OF
++	help
++	  Register a restart callback using the observed factory sequence.
++	  Does not arm a running watchdog timer.
++
+ endif
+--- a/drivers/power/reset/Makefile
++++ b/drivers/power/reset/Makefile
+@@ -37,3 +37,4 @@
+ obj-$(CONFIG_POWER_RESET_SC27XX) += sc27xx-poweroff.o
+ obj-$(CONFIG_NVMEM_REBOOT_MODE) += nvmem-reboot-mode.o
+ obj-$(CONFIG_POWER_MLXBF) += pwr-mlxbf.o
++obj-$(CONFIG_POWER_RESET_C80) += c80-restart.o
+--- /dev/null
++++ b/drivers/power/reset/c80-restart.c
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* MT7626 system restart. Register sequence recovered from the supplied
++ * factory U-Boot reset_cpu/mtk_arch_reset. No timer is armed at probe.
++ */
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/reboot.h>
++
++static int c80_restart(struct sys_off_data *data)
++{
++    void __iomem *base=data->cb_data;
++    u32 mode; unsigned int attempt;
++    writel(0x1971,base+8);
++    mode=readl(base);
++    /* OEM enables external reset. Clear IRQ-only mode, as the upstream
++     * MediaTek watchdog restart handler does. */
++    writel((mode&~BIT(3))|BIT(2)|0x22000000,base);
++    udelay(100);
++    for(attempt=0;attempt<100;++attempt) {
++        writel(0x1209,base+0x14);
++        mdelay(5);
++    }
++    pr_emerg("C80 system reset did not assert; trying other restart handlers\n");
++    return NOTIFY_DONE;
++}
++
++static int c80_restart_probe(struct platform_device *pdev)
++{
++    struct resource *res=platform_get_resource(pdev,IORESOURCE_MEM,0);
++    void __iomem *base; int rc;
++    if(!res || res->start!=0x10212000 || resource_size(res)!=0x18)
++        return -EINVAL;
++    base=devm_ioremap_resource(&pdev->dev,res);
++    if(IS_ERR(base)) return PTR_ERR(base);
++    rc=devm_register_sys_off_handler(&pdev->dev,SYS_OFF_MODE_RESTART,192,
++                                    c80_restart,base);
++    if(!rc) dev_info(&pdev->dev,"MT7626 system restart registered; use reboot\n");
++    return rc;
++}
++static const struct of_device_id c80_restart_match[]={
++    {.compatible="tplink,c80-mt7626-restart"},{}
++};
++static struct platform_driver c80_restart_driver={
++    .probe=c80_restart_probe,.driver={.name="c80-restart",
++    .of_match_table=c80_restart_match,.suppress_bind_attrs=true},
++};
++builtin_platform_driver(c80_restart_driver);
++MODULE_LICENSE("GPL");
+--- a/drivers/soc/mediatek/Kconfig
++++ b/drivers/soc/mediatek/Kconfig
+@@ -78,4 +78,11 @@
+ 	  information about the SoC to the userspace including the
+ 	  manufacturer name, marketing name and soc name.
+ 
++config C80_MCU_TRANSPORT_TEST
++	bool "C80 RAM MCU transport experiment"
++	depends on MACH_MT7626 && OF && FW_LOADER && !SMP
++	help
++	  Explicit sysfs MCU transport test with coherent DMA and reserved EMI.
++	  No 802.11 interface or flash programming support.
++
+ endmenu
+--- a/drivers/soc/mediatek/Makefile
++++ b/drivers/soc/mediatek/Makefile
+@@ -8,3 +8,4 @@
+ obj-$(CONFIG_MTK_MMSYS) += mtk-mutex.o
+ obj-$(CONFIG_MTK_SVS) += mtk-svs.o
+ obj-$(CONFIG_MTK_SOCINFO) += mtk-socinfo.o
++obj-$(CONFIG_C80_MCU_TRANSPORT_TEST) += c80_mcu_transport.o
+--- /dev/null
++++ b/drivers/soc/mediatek/c80_mcu_transport.c
+@@ -0,0 +1,246 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* C80 RAM-only MCU transport experiment, explicitly run once via sysfs.
++ * No MAC80211, RF, calibration or NOR programming. Not a production driver.
++ */
++#include <linux/dma-mapping.h>
++#include <linux/firmware.h>
++#include <linux/io.h>
++#include <linux/kobject.h>
++#include <linux/mm.h>
++#include <linux/memblock.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of_reserved_mem.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/sysfs.h>
++#include <linux/delay.h>
++#include <linux/ktime.h>
++#include "c80_mcu_core.h"
++
++struct c80_window { resource_size_t base,bytes; void __iomem *va; };
++struct c80_linux {
++    struct device *dev;
++    struct c80_window windows[5];
++    void __iomem *emi;
++    struct c80_io io;
++    struct c80_result result;
++    struct mutex lock;
++    struct kobject *kobj;
++    dma_addr_t dma;
++    struct c80_dma_pool *pool;
++    bool ran,finished,retained;
++    int rc;
++};
++static struct c80_linux *c80_live;
++static const char *const c80_filenames[6]={
++    "c80/test_mcu.bin","c80/test_wifi.bin",
++    "c80/WIFI_RAM_CODE_iemi.bin","c80/WIFI_RAM_CODE_demi.bin",
++    "c80/mt7626_patch_e1_hdr.bin","c80/WIFI_RAM_CODE_7626.bin"
++};
++static void __iomem *c80_address(struct c80_linux *c,c80_u32 address)
++{
++    unsigned int i;
++    for(i=0;i<ARRAY_SIZE(c->windows);++i)
++        if(address>=c->windows[i].base &&
++           address+4<=c->windows[i].base+c->windows[i].bytes)
++            return c->windows[i].va+(address-c->windows[i].base);
++    WARN_ON_ONCE(1); return NULL;
++}
++static c80_u32 c80_linux_read(void *context,c80_u32 address)
++{
++    void __iomem *p=c80_address(context,address);
++    return p?readl(p):~0u;
++}
++static void c80_linux_write(void *context,c80_u32 address,c80_u32 value)
++{
++    void __iomem *p=c80_address(context,address);
++    if(p) writel(value,p);
++}
++static c80_u64 c80_linux_time(void *context)
++{ return ktime_to_us(ktime_get()); }
++static void c80_linux_delay(void *context,c80_u32 us)
++{ usleep_range(us,us+50); }
++static void c80_linux_barrier(void *context,int publish)
++{ if(publish) dma_wmb(); else dma_rmb(); }
++static void c80_linux_copy(void *context,c80_u32 offset,const c80_u8 *src,c80_u32 n)
++{
++    struct c80_linux *c=context;
++    if(WARN_ON_ONCE(offset>C80_EMI_SIZE || n>C80_EMI_SIZE-offset)) return;
++    memcpy_toio(c->emi+offset,src,n); wmb();
++}
++static c80_u32 c80_linux_crc(void *context,c80_u32 offset,c80_u32 n)
++{
++    struct c80_linux *c=context; c80_u32 crc=~0u,i;
++    if(WARN_ON_ONCE(offset>C80_EMI_SIZE || n>C80_EMI_SIZE-offset)) return 0;
++    while(n--) {
++        crc^=readb(c->emi+offset++);
++        for(i=0;i<8;++i) crc=(crc>>1)^(0xedb88320u&-(crc&1));
++        cond_resched();
++    }
++    return ~crc;
++}
++static void c80_linux_stage(void *context,c80_u32 stage)
++{
++    struct c80_linux *c=context;
++    dev_info(c->dev,"MCU transport stage%u\n",stage);
++}
++static ssize_t status_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock); r=&c->result;
++    n=sysfs_emit(buf,
++        "ran=%u finished=%u result=%d primary=%u cleanup=%u critical=%u phase=%u\n"
++        "ready=%u own_before=%08x own_last=%08x own_sent=%u\n"
++        "main_iemi_crc=%08x main_demi_crc=%08x\n"
++        "get_valid=%u get_status=%u release_valid=%u release_status=%u\n"
++        "tx_submitted=%u tx_completed=%u rx_packets=%u rx_ignored=%u rx_next=%u/%u\n"
++        "event_len=%u event_id=%02x event_seq=%u packet_id=%04x rx_bad_ctrl=%08x\n"
++        "glo_before=%08x glo_after=%08x mask_before=%08x mask_after=%08x source_after=%08x\n"
++        "dma_started=%u dma_idle=%u mcu_released=%u mcu_stopped=%u pools_retained=%u\n"
++        "controls_before=%08x/%08x/%08x controls_after=%08x/%08x/%08x\n"
++        "cleanup_flags=%08x owned_bad=%x other_changed=%x rings_bad=%08x\n"
++        "control_diff=%08x/%08x/%08x owned_masks=00208001/00000001/0000000c\n"
++        "tx15_before=%08x/%08x/%08x/%08x after=%08x/%08x/%08x/%08x\n"
++        "rx0_before=%08x/%08x/%08x/%08x after=%08x/%08x/%08x/%08x\n"
++        "rx1_before=%08x/%08x/%08x/%08x after=%08x/%08x/%08x/%08x\n"
++        "tx3_before=%08x/%08x/%08x/%08x after=%08x/%08x/%08x/%08x\n"
++        "command_tx=%u/%u fwdl_tx=%u/%u sequence=%u last_status=%u\n"
++        "patch_address_valid=%u status=%u finish_valid=%u status=%u\n"
++        "patch_bytes=%u chunks=%u uploaded=%u ready_valid=%u ready_status=%u sem_held=%u\n"
++        "main_attempted=%u regions=%u/3 region_index=%u bytes=%u chunks=%u\n"
++        "main_address_valid=%x status=%u/%u/%u\n"
++        "main_region_bytes=%u/%u/%u chunks=%u/%u/%u\n"
++        "main_start_attempted=%u valid=%u status=%u ready=%u\n"
++        "main_sync_before=%08x after=%08x wanted_state=3\n"
++        "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
++        c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
++        r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
++        r->get_valid,r->get_status,r->release_valid,r->release_status,
++        r->tx_submitted,r->tx_completed,r->rx_packets,r->rx_ignored,r->rx_next[0],r->rx_next[1],
++        r->last_event_len,r->last_event_id,r->last_event_seq,r->last_packet_id,r->rx_bad_ctrl,
++        r->glo_before,r->glo_after,r->mask_before,r->mask_after,r->source_after,
++        r->dma_started,r->dma_idle,r->mcu_released,r->mcu_stopped,c->retained,
++        r->controls_before[0],r->controls_before[1],r->controls_before[2],
++        r->controls_after[0],r->controls_after[1],r->controls_after[2],
++        r->cleanup_flags,r->controls_owned_bad,r->controls_other_changed,r->rings_restore_bad,
++        r->control_diff[0],r->control_diff[1],r->control_diff[2],
++        r->rings_before[0][0],r->rings_before[0][1],r->rings_before[0][2],r->rings_before[0][3],
++        r->rings_after[0][0],r->rings_after[0][1],r->rings_after[0][2],r->rings_after[0][3],
++        r->rings_before[1][0],r->rings_before[1][1],r->rings_before[1][2],r->rings_before[1][3],
++        r->rings_after[1][0],r->rings_after[1][1],r->rings_after[1][2],r->rings_after[1][3],
++        r->rings_before[2][0],r->rings_before[2][1],r->rings_before[2][2],r->rings_before[2][3],
++        r->rings_after[2][0],r->rings_after[2][1],r->rings_after[2][2],r->rings_after[2][3],
++        r->rings_before[3][0],r->rings_before[3][1],r->rings_before[3][2],r->rings_before[3][3],
++        r->rings_after[3][0],r->rings_after[3][1],r->rings_after[3][2],r->rings_after[3][3],
++        r->command_completed,r->command_submitted,r->fwdl_completed,r->fwdl_submitted,
++        r->sequence,r->last_event_status,r->patch_address_valid,r->patch_address_status,
++        r->patch_finish_valid,r->patch_finish_status,r->patch_bytes,r->patch_chunks,
++        r->patch_uploaded,r->patch_ready_valid,r->patch_ready_status,r->sem_held,
++        r->main_attempted,r->main_regions_complete,r->main_region_index,r->main_bytes,r->main_chunks,
++        r->main_region_valid,r->main_region_status[0],r->main_region_status[1],r->main_region_status[2],
++        r->main_region_bytes[0],r->main_region_bytes[1],r->main_region_bytes[2],
++        r->main_region_chunks[0],r->main_region_chunks[1],r->main_region_chunks[2],
++        r->main_start_attempted,r->main_start_valid,r->main_start_status,r->main_ready,
++        r->main_sync_before,r->main_sync_after,c->ran,!!c->result.critical);
++    mutex_unlock(&c->lock); return n;
++}
++static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
++                          const char *buf,size_t count)
++{
++    struct c80_linux *c=c80_live;
++    const struct firmware *fw[6]={}; struct c80_blob blobs[6];
++    unsigned int i; int rc;
++    if(!c || !sysfs_streq(buf,"1")) return -EINVAL;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    if(c->ran) { mutex_unlock(&c->lock); return -EALREADY; }
++    c->ran=true;
++    for(i=0;i<6;++i) {
++        rc=request_firmware_direct(&fw[i],c80_filenames[i],c->dev);
++        if(rc) { c->rc=rc; goto done; }
++        if(fw[i]->size>UINT_MAX) { c->rc=-EFBIG; goto done; }
++        blobs[i].data=fw[i]->data; blobs[i].bytes=fw[i]->size;
++    }
++    c->pool=dma_alloc_coherent(c->dev,sizeof(*c->pool),&c->dma,GFP_KERNEL);
++    if(!c->pool) { c->rc=-ENOMEM; goto done; }
++    memset(c->pool,0,sizeof(*c->pool));
++    if(upper_32_bits(c->dma) || c->dma<0x40200000 ||
++       c->dma+sizeof(*c->pool)>0x42000000 || (c->dma&255)) {
++        c->rc=-ERANGE; goto done;
++    }
++    c->io.pool=c->pool; c->io.dma_base=(c80_u32)c->dma;
++    c->rc=c80_run(&c->io,blobs,&c->result);
++done:
++    if(c->pool) {
++        /* DMA must never retain a pointer to returned kernel pages. A failed
++         * stop pins the entire pool for the remaining lifetime of this boot. */
++        if(c->result.critical ||
++           (c->result.dma_started && !c->result.dma_idle)) c->retained=true;
++        else { dma_free_coherent(c->dev,sizeof(*c->pool),c->pool,c->dma); c->pool=NULL; }
++    }
++    for(i=0;i<6;++i) release_firmware(fw[i]);
++    c->finished=true;
++    dev_info(c->dev,"MCU main firmware test result=%d critical=%u; fresh boot required\n",
++             c->rc,c->result.critical);
++    mutex_unlock(&c->lock); return count;
++}
++static struct kobj_attribute status_attr=__ATTR_RO(status);
++static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
++static struct attribute *c80_attrs[]={&status_attr.attr,&run_attr.attr,NULL};
++static const struct attribute_group c80_group={.attrs=c80_attrs};
++
++static int c80_mcu_probe(struct platform_device *pdev)
++{
++    static const resource_size_t expected_base[5]={0x18000000,0x10000000,
++        0x10006000,0x10212018,0x10210000};
++    static const resource_size_t expected_bytes[5]={0x100000,0x1000,0x1000,4,0x1000};
++    struct device_node *memory; struct reserved_mem *rmem;
++    struct c80_linux *c; struct resource *res; unsigned int i; int rc;
++    if(c80_live) return -EBUSY;
++    memory=of_parse_phandle(pdev->dev.of_node,"memory-region",0);
++    if(!memory) return -EINVAL;
++    rmem=of_reserved_mem_lookup(memory);
++    rc=of_property_read_bool(memory,"no-map")?0:-EINVAL;
++    of_node_put(memory);
++    if(rc || !rmem || rmem->base!=0x40000000 || rmem->size!=C80_EMI_SIZE)
++        return dev_err_probe(&pdev->dev,-EINVAL,"Exact2MiB no-map EMI reservation required\n");
++    for(i=0;i<C80_EMI_SIZE;i+=PAGE_SIZE)
++        if(memblock_is_map_memory(0x40000000+i))
++            return dev_err_probe(&pdev->dev,-EINVAL,"EMI has a cacheable linear RAM alias\n");
++    c=devm_kzalloc(&pdev->dev,sizeof(*c),GFP_KERNEL);
++    if(!c) return -ENOMEM;
++    c->dev=&pdev->dev; mutex_init(&c->lock);
++    for(i=0;i<ARRAY_SIZE(c->windows);++i) {
++        res=platform_get_resource(pdev,IORESOURCE_MEM,i);
++        if(!res || res->start!=expected_base[i] ||
++           resource_size(res)!=expected_bytes[i]) return -EINVAL;
++        c->windows[i].base=res->start; c->windows[i].bytes=resource_size(res);
++        c->windows[i].va=devm_ioremap_resource(&pdev->dev,res);
++        if(IS_ERR(c->windows[i].va)) return PTR_ERR(c->windows[i].va);
++    }
++    c->emi=devm_ioremap(&pdev->dev,rmem->base,rmem->size);
++    if(!c->emi) return -ENOMEM;
++    rc=dma_set_mask_and_coherent(&pdev->dev,DMA_BIT_MASK(32));
++    if(rc) return rc;
++    c->io=(struct c80_io){.context=c,.read=c80_linux_read,.write=c80_linux_write,
++        .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
++        .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage};
++    c->kobj=kobject_create_and_add("c80_wifi",kernel_kobj);
++    if(!c->kobj) return -ENOMEM;
++    c80_live=c;
++    rc=sysfs_create_group(c->kobj,&c80_group);
++    if(rc) { c80_live=NULL; kobject_put(c->kobj); return rc; }
++    platform_set_drvdata(pdev,c);
++    dev_info(&pdev->dev,"RAM MCU main-firmware test available in /sys/kernel/c80_wifi; inactive until run=1\n");
++    return 0;
++}
++static const struct of_device_id c80_mcu_match[]={
++    {.compatible="tplink,c80-mcu-transport-test"},{}
++};
++static struct platform_driver c80_mcu_driver={
++    .probe=c80_mcu_probe,.driver={.name="c80-mcu-test",.of_match_table=c80_mcu_match,
++    .suppress_bind_attrs=true},
++};
++builtin_platform_driver(c80_mcu_driver);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/soc/mediatek/c80_mcu_core.h
+@@ -0,0 +1,509 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Narrow MT7626 MCU main-firmware experiment. No 802.11/RF/flash commands.
++ * Shared with the native fault model; OS supplies coherent DMA, uncached EMI,
++ * MMIO, monotonic time and barriers. Only little-endian ARM/x86 are supported.
++ */
++#ifndef C80_MCU_CORE_H
++#define C80_MCU_CORE_H
++#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++#error This bring-up core requires a little-endian CPU
++#endif
++typedef unsigned int c80_u32;
++typedef unsigned char c80_u8;
++typedef unsigned long long c80_u64;
++#define C80_TX_N 128u
++#define C80_COMMAND_SLOTS 12u
++#define C80_FRAGMENT_SLOTS 32u
++#define C80_SYNC (C80_HIF+0xc1140)
++#define C80_RX_N 64u
++#define C80_RX_SIZE 1536u
++#define C80_EMI_SIZE 0x200000u
++#define C80_HIF 0x18000000u
++#define C80_OWN (C80_HIF+0x7000)
++#define C80_GLO (C80_HIF+0x4208)
++#define C80_MASK (C80_HIF+0x4204)
++#define C80_SOURCE (C80_HIF+0x4200)
++#define C80_RESET 0x10212018u
++#define C80_DONE 0x80000000u
++#define C80_LS0 0x40000000u
++#define C80_MAX_POLLS 40000u
++
++struct c80_desc { volatile c80_u32 addr, ctrl, addr1, info; };
++struct c80_dma_pool {
++    struct c80_desc tx[C80_TX_N], fwdl[C80_TX_N];
++    struct c80_desc rx[2][C80_RX_N];
++    c80_u8 command[C80_COMMAND_SLOTS][256];
++    c80_u8 fragment[C80_FRAGMENT_SLOTS][1024];
++    c80_u8 data[2][C80_RX_N][C80_RX_SIZE];
++};
++struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
++struct c80_io {
++    void *context;
++    c80_u32 (*read)(void *,c80_u32);
++    void (*write)(void *,c80_u32,c80_u32);
++    c80_u64 (*time_us)(void *);
++    void (*delay_us)(void *,c80_u32);
++    void (*dma_order)(void *,int); /* 1:publish before device,0:read device data */
++    void (*copy_emi)(void *,c80_u32,const c80_u8 *,c80_u32);
++    c80_u32 (*crc_emi)(void *,c80_u32,c80_u32);
++    void (*stage)(void *,c80_u32);
++    struct c80_dma_pool *pool;
++    c80_u32 dma_base;
++};
++enum c80_failure {
++    C80_OK=0,C80_BAD_FW=1,C80_BAD_AON=2,C80_BAD_ID=3,C80_STALE=4,
++    C80_BAD_TIMER=5,C80_BOOT_CONTROL=6,C80_READY_TIMEOUT=7,C80_OWN_TIMEOUT=8,
++    C80_BAD_DMA=9,C80_MAIN_CRC=10,C80_RINGS_CONFIGURED=11,C80_TX_TIMEOUT=12,
++    C80_RX_TIMEOUT=13,C80_RX_BAD=14,C80_SEMAPHORE=15,C80_RESTORE=16,
++    C80_RING_PROGRAM=17,C80_DOWNLOAD_STATUS=18,C80_FWDL_TIMEOUT=19,
++    C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,
++    C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
++};
++struct c80_result {
++    c80_u32 phase,primary,cleanup,critical,ready,own_before,own_last,own_sent;
++    c80_u32 glo_before,glo_after,mask_before,mask_after,source_after;
++    c80_u32 controls_before[3],controls_after[3],aon_before[10],aon_after[10];
++    c80_u32 rings_before[4][4],rings_after[4][4];
++    c80_u32 main_crc[2],tx_submitted,tx_completed,rx_packets,rx_ignored;
++    c80_u32 get_valid,get_status,release_valid,release_status,rx_bad_ctrl;
++    c80_u32 last_event_len,last_event_id,last_event_seq,last_packet_id;
++    c80_u32 dma_started,dma_idle,mcu_released,mcu_stopped,controls_touched;
++    c80_u32 rings_touched,dma_cfg_touched,rx_next[2];
++    c80_u32 cleanup_flags,controls_owned_bad,controls_other_changed;
++    c80_u32 control_diff[3],rings_restore_bad;
++    c80_u32 command_submitted,command_completed,fwdl_submitted,fwdl_completed;
++    c80_u32 sequence,last_event_status,sem_held,release_attempted;
++    c80_u32 patch_address_valid,patch_address_status,patch_finish_valid,patch_finish_status;
++    c80_u32 patch_bytes,patch_chunks,patch_ready_valid,patch_ready_status,patch_uploaded;
++    c80_u32 main_attempted,main_region_index,main_regions_complete,main_bytes,main_chunks;
++    c80_u32 main_region_valid,main_region_status[3],main_region_bytes[3],main_region_chunks[3];
++    c80_u32 main_start_attempted,main_start_valid,main_start_status,main_ready;
++    c80_u32 main_sync_before,main_sync_after;
++};
++#define C80_CLEANUP_CONTROL 1u
++#define C80_CLEANUP_GLO 2u
++#define C80_CLEANUP_MASK 4u
++#define C80_CLEANUP_RING 8u
++static const c80_u32 c80_aon_regs[10]={0x10000220,0x10000228,0x10000230,
++    0x10000238,0x10000370,0x10006000,0x10006608,0x1000660c,0x10006610,C80_RESET};
++static const c80_u32 c80_controls[3]={0x18002150,0x18001130,0x10210000};
++static const c80_u32 c80_control_masks[3]={0x208001,1,12};
++static const c80_u32 c80_ring_regs[4]={0x180043f0,0x18004400,0x18004410,0x18004330};
++static const c80_u32 c80_blob_sizes[6]={72096,169240,395008,119036,1838,25808};
++static const c80_u32 c80_blob_crcs[6]={0x2ede9294,0x4e2c264c,0x10efafc7,0x9d2bbb46,0xce747ab9,0x92c09901};
++static const c80_u32 c80_blob_offsets[4]={0,0x43000,0x75000,0x146800};
++
++static c80_u32 c80_crc(const c80_u8 *p,c80_u32 size)
++{
++    c80_u32 crc=~0u,i;
++    while(size--) { crc^=*p++; for(i=0;i<8;++i) crc=(crc>>1)^(0xedb88320u&-(crc&1)); }
++    return ~crc;
++}
++static c80_u32 c80_read(struct c80_io *io,c80_u32 reg)
++{ return io->read(io->context,reg); }
++static void c80_write(struct c80_io *io,c80_u32 reg,c80_u32 value)
++{ io->write(io->context,reg,value); }
++static void c80_stage(struct c80_io *io,struct c80_result *r,c80_u32 phase)
++{ r->phase=phase; if(io->stage) io->stage(io->context,phase); }
++static int c80_poll(struct c80_io *io,c80_u32 reg,c80_u32 mask,c80_u32 value,
++                    c80_u32 timeout,c80_u32 *last)
++{
++    c80_u64 start=io->time_us(io->context),now; c80_u32 i,v;
++    for(i=0;i<C80_MAX_POLLS;++i) {
++        v=c80_read(io,reg); if(last) *last=v;
++        if(v!=0xffffffffu && (v&mask)==value) return 1;
++        now=io->time_us(io->context);
++        if(now<start || now-start>=timeout) return 0;
++        io->delay_us(io->context,50);
++    }
++    return 0;
++}
++static c80_u32 c80_dma_address(struct c80_io *io,const volatile void *p)
++{ return io->dma_base+(c80_u32)((const volatile c80_u8 *)p-(const volatile c80_u8 *)io->pool); }
++static void c80_put16(c80_u8 *p,c80_u32 v) { p[0]=v; p[1]=v>>8; }
++static void c80_put32(c80_u8 *p,c80_u32 v)
++{ c80_put16(p,v); c80_put16(p+2,v>>16); }
++static c80_u32 c80_get16(const c80_u8 *p) { return p[0]|((c80_u32)p[1]<<8); }
++/* Exact wire headers reconstructed by executing OEM4026249c. Scatter uses
++ * PQIDf800 and packet format3; ordinary commands PQID8000/format2.
++ * Payload/packet storage is coherent, never reused while hardware owns it. */
++static c80_u32 c80_command(c80_u8 *p,c80_u32 cid,const c80_u8 *body,
++                            c80_u32 bytes,c80_u32 sequence)
++{
++    c80_u32 i,n=64+bytes,scatter=cid==0xee;
++    for(i=0;i<n;++i) p[i]=0;
++    c80_put32(p,(scatter?0xf8000000:0x80000000)|n);
++    c80_put32(p+4,scatter?0x0300a000:0x0200a000);
++    c80_put16(p+32,32+bytes); c80_put16(p+34,scatter?0xf800:0x8000);
++    p[36]=cid; p[37]=0xa0; p[38]=3; p[39]=sequence;
++    for(i=0;i<bytes;++i) p[64+i]=body[i];
++    return n;
++}
++static c80_u32 c80_receive(struct c80_io *io,struct c80_result *r,
++                           c80_u32 sequence,c80_u32 event,c80_u32 *status)
++{
++    c80_u32 q,index,control,size,n; const c80_u8 *p;
++    /* No rearming: a bounded patch trial uses at most63 packets per ring. */
++    for(q=0;q<2;++q) for(n=0;n<C80_RX_N;++n) {
++        index=r->rx_next[q];
++        if(index>=C80_RX_N-1) return C80_RX_BAD;
++        control=io->pool->rx[q][index].ctrl;
++        if(!(control&C80_DONE)) break;
++        io->dma_order(io->context,0);
++        size=(control>>16)&0x3fff;
++        ++r->rx_packets; ++r->rx_next[q];
++        if(!(control&C80_LS0) || !size || size>C80_RX_SIZE) {
++            r->rx_bad_ctrl=control; return C80_RX_BAD;
++        }
++        p=io->pool->data[q][index];
++        if(size<25) { ++r->rx_ignored; continue; }
++        r->last_event_len=c80_get16(p+16);
++        r->last_packet_id=c80_get16(p+18);
++        r->last_event_id=p[20]; r->last_event_seq=p[21];
++        if(r->last_event_len<9 || r->last_event_len>size-16) return C80_RX_BAD;
++        /* OEM4026410c treats generic EID1 status at event+8; semaphore
++         * EID4 has the same8-byte event prefix. Do not accept unrelated IDs. */
++        r->last_event_status=p[24];
++        if(r->last_packet_id!=0xe000 || p[20]!=event || p[21]!=sequence) {
++            ++r->rx_ignored; continue;
++        }
++        *status=p[24]; return 0;
++    }
++    return C80_RX_TIMEOUT;
++}
++static c80_u32 c80_next_sequence(struct c80_result *r)
++{
++    r->sequence=r->sequence==15?1:r->sequence+1;
++    return r->sequence;
++}
++static c80_u32 c80_exchange(struct c80_io *io,struct c80_result *r,c80_u32 cid,
++                            const c80_u8 *body,c80_u32 bytes,c80_u32 *reply)
++{
++    c80_u32 slot=r->command_submitted,sequence=c80_next_sequence(r),i,rx=0,tx=0,rc,len;
++    c80_u64 start,now; struct c80_desc *d;
++    if(slot>=C80_COMMAND_SLOTS || bytes>192 || !sequence || sequence>15) return C80_TX_TIMEOUT;
++    len=c80_command(io->pool->command[slot],cid,body,bytes,sequence);
++    d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
++    d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
++    io->dma_order(io->context,1);
++    ++r->command_submitted; ++r->tx_submitted;
++    c80_write(io,0x180043f8,r->command_submitted);
++    start=io->time_us(io->context);
++    for(i=0;i<C80_MAX_POLLS;++i) {
++        if(!tx && (d->ctrl&C80_DONE) && c80_read(io,0x180043fc)==r->command_submitted) {
++            io->dma_order(io->context,0); tx=1; ++r->command_completed; ++r->tx_completed;
++        }
++        if(!rx) {
++            rc=c80_receive(io,r,sequence,cid==0x10?4:1,reply);
++            if(rc==C80_RX_BAD) return rc;
++            if(!rc) rx=1;
++        }
++        if(rx && tx) return 0;
++        now=io->time_us(io->context);
++        if(now<start || now-start>=2000000) break;
++        io->delay_us(io->context,50);
++    }
++    return tx?C80_RX_TIMEOUT:C80_TX_TIMEOUT;
++}
++static c80_u32 c80_semaphore(struct c80_io *io,struct c80_result *r,
++                             c80_u32 operation,c80_u32 *reply)
++{
++    c80_u8 body[4]; c80_put32(body,operation);
++    return c80_exchange(io,r,0x10,body,4,reply);
++}
++static c80_u32 c80_scatter(struct c80_io *io,struct c80_result *r,
++                           const c80_u8 *body,c80_u32 bytes)
++{
++    c80_u32 slot=r->fwdl_submitted,sequence=c80_next_sequence(r),i,len;
++    c80_u64 start,now; struct c80_desc *d;
++    if(slot>=C80_FRAGMENT_SLOTS || !bytes || bytes>960 || sequence>15) return C80_FWDL_TIMEOUT;
++    len=c80_command(io->pool->fragment[slot],0xee,body,bytes,sequence);
++    d=&io->pool->fwdl[slot]; d->addr=c80_dma_address(io,io->pool->fragment[slot]);
++    d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
++    io->dma_order(io->context,1); ++r->fwdl_submitted; ++r->tx_submitted;
++    c80_write(io,0x18004338,r->fwdl_submitted);
++    start=io->time_us(io->context);
++    for(i=0;i<C80_MAX_POLLS;++i) {
++        if((d->ctrl&C80_DONE) && c80_read(io,0x1800433c)==r->fwdl_submitted) {
++            io->dma_order(io->context,0); ++r->fwdl_completed; ++r->tx_completed;
++            if(r->phase>=14 && r->phase<=16) {
++                ++r->main_chunks; r->main_bytes+=bytes;
++                ++r->main_region_chunks[r->main_region_index];
++                r->main_region_bytes[r->main_region_index]+=bytes;
++            } else { ++r->patch_chunks; r->patch_bytes+=bytes; }
++            return 0;
++        }
++        now=io->time_us(io->context);
++        if(now<start || now-start>=2000000) break;
++        io->delay_us(io->context,50);
++    }
++    return C80_FWDL_TIMEOUT;
++}
++static c80_u32 c80_patch(struct c80_io *io,struct c80_result *r,
++                         const struct c80_blob *fw)
++{
++    c80_u32 rc,status=0,release_rc=0; c80_u8 body[12];
++    c80_stage(io,r,7);
++    rc=c80_semaphore(io,r,1,&r->get_status);
++    if(rc) return rc;
++    r->get_valid=1;
++    if(r->get_status==1) {
++        r->patch_ready_valid=1; r->patch_ready_status=1; return 0;
++    }
++    if(r->get_status!=2) return C80_SEMAPHORE;
++    r->sem_held=1;
++    c80_stage(io,r,8);
++    c80_put32(body,0x1c000); c80_put32(body+4,1808); c80_put32(body+8,0x80000000);
++    rc=c80_exchange(io,r,5,body,12,&r->patch_address_status);
++    if(rc) goto release;
++    r->patch_address_valid=1;
++    if(r->patch_address_status) { rc=C80_DOWNLOAD_STATUS; goto release; }
++    c80_stage(io,r,9);
++    rc=c80_scatter(io,r,fw->data+30,960);
++    if(rc) goto release;
++    rc=c80_scatter(io,r,fw->data+990,848);
++    if(rc) goto release;
++    c80_stage(io,r,10);
++    c80_put32(body,0);
++    rc=c80_exchange(io,r,7,body,4,&r->patch_finish_status);
++    if(rc) goto release;
++    r->patch_finish_valid=1;
++    if(r->patch_finish_status) { rc=C80_DOWNLOAD_STATUS; goto release; }
++    r->patch_uploaded=1;
++release:
++    /* On explicit MCU rejection the command path is still usable. Release
++     * the semaphore before stopping. After transport failure, hold MCU/reset
++     * and stop DMA rather than transmitting into an unconfirmed queue. */
++    if(!rc || rc==C80_DOWNLOAD_STATUS) {
++        c80_stage(io,r,11); r->release_attempted=1;
++        release_rc=c80_semaphore(io,r,0,&r->release_status);
++        if(!release_rc) {
++            r->release_valid=1;
++            if(r->release_status==3) r->sem_held=0;
++            else release_rc=C80_SEMAPHORE;
++        }
++        if(!rc) rc=release_rc;
++    }
++    if(rc) return rc;
++    c80_stage(io,r,12);
++    rc=c80_semaphore(io,r,1,&r->patch_ready_status);
++    if(rc) return rc;
++    r->patch_ready_valid=1;
++    if(r->patch_ready_status==2) {
++        r->sem_held=1; r->release_attempted=1;
++        release_rc=c80_semaphore(io,r,0,&status);
++        if(!release_rc && status==3) r->sem_held=0;
++    }
++    return r->patch_ready_status==1?0:C80_PATCH_NOT_READY;
++}
++/* Region metadata and byte ranges match the actual OEM402ef9e0 parser.
++ * The exact six firmware lengths/CRCs are verified before peripheral writes.
++ * Destinations below are MCU address-space values carried only in packets. */
++static c80_u32 c80_main_firmware(struct c80_io *io,struct c80_result *r,
++                                 const struct c80_blob *fw)
++{
++    static const c80_u32 destinations[3]={0x20400,0x2010000,0x40100000};
++    static const c80_u32 lengths[3]={2896,1584,21136};
++    c80_u32 i,offset=0,left,n,rc; c80_u8 body[12];
++    r->main_attempted=1; c80_stage(io,r,13);
++    /* OEM final sync hook requires state3, initial transfer state1.
++     * Refuse an inherited running image rather than issuing a restart command.
++     * State0 may settle to1; no undocumented Wi-Fi power-on writes. */
++    r->main_sync_before=c80_read(io,C80_SYNC);
++    if(r->main_sync_before==0xffffffffu || ((r->main_sync_before>>1)&7)>1)
++        return C80_BAD_SYNC;
++    if(!c80_poll(io,C80_SYNC,14,2,2000000,&r->main_sync_before)) return C80_BAD_SYNC;
++    for(i=0;i<3;++i) {
++        r->main_region_index=i; c80_stage(io,r,14+i);
++        c80_put32(body,destinations[i]); c80_put32(body+4,lengths[i]);
++        c80_put32(body+8,0x80000000);
++        rc=c80_exchange(io,r,1,body,12,&r->main_region_status[i]);
++        if(rc) return rc;
++        r->main_region_valid|=1u<<i;
++        if(r->main_region_status[i]) return C80_DOWNLOAD_STATUS;
++        left=lengths[i];
++        while(left) {
++            n=left>960?960:left;
++            if(offset>fw->bytes || n>fw->bytes-offset) return C80_BAD_FW;
++            rc=c80_scatter(io,r,fw->data+offset,n);
++            if(rc) return rc;
++            offset+=n; left-=n;
++        }
++        ++r->main_regions_complete;
++    }
++    /* The36B separator and156B trailers are metadata, never scatter payload.
++     * All feature bytes are0 in this exact image: start with flags0/address0. */
++    if(offset!=25616) return C80_BAD_FW;
++    c80_stage(io,r,17); c80_put32(body,0); c80_put32(body+4,0);
++    r->main_start_attempted=1;
++    rc=c80_exchange(io,r,2,body,8,&r->main_start_status);
++    if(rc) return rc;
++    r->main_start_valid=1;
++    if(r->main_start_status) return C80_DOWNLOAD_STATUS;
++    c80_stage(io,r,18);
++    if(!c80_poll(io,C80_SYNC,14,6,2000000,&r->main_sync_after)) return C80_MAIN_NOT_READY;
++    r->main_ready=1; return 0;
++}
++static void c80_cleanup(struct c80_io *io,struct c80_result *r)
++{
++    c80_u32 v,i,j;
++    c80_stage(io,r,90);
++    if(r->dma_cfg_touched) {
++        v=c80_read(io,C80_GLO); c80_write(io,C80_GLO,v&~5u);
++    }
++    if(r->mcu_released) {
++        v=c80_read(io,C80_RESET);
++        c80_write(io,C80_RESET,(v&0xffffff)|0x88001000);
++        if(!c80_poll(io,C80_RESET,0x1000,0x1000,20000,0)) {
++            r->critical=C80_CRITICAL_RESET; return;
++        }
++        r->mcu_stopped=1; io->delay_us(io->context,2000);
++    }
++    if(r->dma_cfg_touched) {
++        if(!c80_poll(io,C80_GLO,15,0,200000,0)) {
++            r->critical=C80_CRITICAL_DMA; return;
++        }
++        r->dma_idle=1;
++    }
++    /* Read-only DMA indices cannot be restored by ordinary register writes.
++     * Restore programmed controls only, retain masked IRQ source; require fresh boot. */
++    if(r->rings_touched) for(i=0;i<4;++i) for(j=0;j<3;++j)
++        c80_write(io,c80_ring_regs[i]+4*j,r->rings_before[i][j]);
++    if(r->dma_cfg_touched) c80_write(io,C80_GLO,r->glo_before);
++    for(i=3;i;i--) if(r->controls_touched&(1u<<(i-1))) {
++        v=c80_read(io,c80_controls[i-1]);
++        c80_write(io,c80_controls[i-1],(v&~c80_control_masks[i-1])|
++            (r->controls_before[i-1]&c80_control_masks[i-1]));
++    }
++    for(i=0;i<3;++i) {
++        r->controls_after[i]=c80_read(io,c80_controls[i]);
++        r->control_diff[i]=r->controls_after[i]^r->controls_before[i];
++        /* Restore/check exactly the bits this test owns. The MCU/hardware
++         * changes other fields in18002150 during the real command path.
++         * Preserve and report those fields; do not force an old full word. */
++        if((r->controls_touched&(1u<<i)) &&
++           (r->control_diff[i]&c80_control_masks[i])) {
++            r->controls_owned_bad|=1u<<i;
++            r->cleanup_flags|=C80_CLEANUP_CONTROL;
++        }
++        if(r->control_diff[i]&~c80_control_masks[i]) r->controls_other_changed|=1u<<i;
++    }
++    if(r->ready) {
++        r->glo_after=c80_read(io,C80_GLO); r->mask_after=c80_read(io,C80_MASK);
++        r->source_after=c80_read(io,C80_SOURCE);
++        if((r->dma_cfg_touched || r->rings_touched) && (r->glo_after&15)) {
++            r->critical=C80_CRITICAL_DMA; return;
++        }
++        if(r->dma_cfg_touched && r->glo_after!=r->glo_before) r->cleanup_flags|=C80_CLEANUP_GLO;
++        if(r->dma_cfg_touched && r->mask_after!=r->mask_before) r->cleanup_flags|=C80_CLEANUP_MASK;
++    }
++    for(i=0;i<10;++i) r->aon_after[i]=c80_read(io,c80_aon_regs[i]);
++    if(r->rings_touched) for(i=0;i<4;++i) for(j=0;j<4;++j) {
++        r->rings_after[i][j]=c80_read(io,c80_ring_regs[i]+4*j);
++        if(j<3 && r->rings_after[i][j]!=r->rings_before[i][j]) {
++            r->rings_restore_bad|=1u<<(i*3+j); r->cleanup_flags|=C80_CLEANUP_RING;
++        }
++    }
++    r->cleanup=!!r->cleanup_flags;
++}
++static c80_u32 c80_run(struct c80_io *io,const struct c80_blob *fw,
++                       struct c80_result *r)
++{
++    c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
++    c80_stage(io,r,1);
++    for(i=0;i<6;++i) if(!fw[i].data || fw[i].bytes!=c80_blob_sizes[i] ||
++       c80_crc(fw[i].data,fw[i].bytes)!=c80_blob_crcs[i]) { r->primary=C80_BAD_FW; return C80_BAD_FW; }
++    start=io->time_us(io->context); io->delay_us(io->context,10);
++    if(io->time_us(io->context)<=start) { r->primary=C80_BAD_TIMER; return C80_BAD_TIMER; }
++    for(i=0;i<10;++i) r->aon_before[i]=c80_read(io,c80_aon_regs[i]);
++    if((r->aon_before[0]&0x8104) || (r->aon_before[1]&0x8104) ||
++       (r->aon_before[2]&7) || (r->aon_before[3]&7) ||
++       (r->aon_before[4]&0xfff)!=0x40 || !(r->aon_before[5]&1) ||
++       (r->aon_before[6]&0x20800000)!=0x20800000 ||
++       r->aon_before[7]!=r->aon_before[8] ||
++       (r->aon_before[7]&0x07000000)!=0x07000000 ||
++       (r->aon_before[9]&0x1200)!=0x1000) { r->primary=C80_BAD_AON; return C80_BAD_AON; }
++    c80_stage(io,r,2);
++    if(c80_read(io,0x180b1010)!=0x10040101 || c80_read(io,0x180b101c)&15 ||
++       (c80_read(io,0x18002000)&0xffff)!=0x8a00 ||
++       (c80_read(io,0x18002004)&0xffff)!=0x8a00) { r->primary=C80_BAD_ID; return C80_BAD_ID; }
++    if(c80_read(io,0x18002600)==0x1d1e) { r->primary=C80_STALE; return C80_STALE; }
++    for(i=0;i<3;++i) r->controls_before[i]=c80_read(io,c80_controls[i]);
++    c80_stage(io,r,3);
++    for(i=0;i<2;++i) {
++        io->copy_emi(io->context,c80_blob_offsets[i],fw[i].data,fw[i].bytes);
++        if(io->crc_emi(io->context,c80_blob_offsets[i],fw[i].bytes)!=c80_blob_crcs[i]) {
++            rc=C80_BAD_FW; goto done;
++        }
++    }
++    for(i=0;i<3;++i) {
++        r->controls_touched|=1u<<i;
++        c80_write(io,c80_controls[i],r->controls_before[i]|c80_control_masks[i]);
++        if((c80_read(io,c80_controls[i])&c80_control_masks[i])!=c80_control_masks[i]) {
++            rc=C80_BOOT_CONTROL; goto done;
++        }
++    }
++    v=c80_read(io,C80_RESET); r->mcu_released=1;
++    c80_write(io,C80_RESET,((v&0xffffff)&~0x1000u)|0x88000000);
++    if(c80_read(io,C80_RESET)&0x1000) { rc=C80_BOOT_CONTROL; goto done; }
++    c80_stage(io,r,4);
++    if(!c80_poll(io,0x18002600,~0u,0x1d1e,2000000,0)) { rc=C80_READY_TIMEOUT; goto done; }
++    r->ready=1; r->own_before=c80_read(io,C80_OWN);
++    if(r->own_before==0xffffffffu) { rc=C80_OWN_TIMEOUT; goto done; }
++    if(r->own_before&1) { c80_write(io,C80_OWN,2); r->own_sent=1; }
++    if(!c80_poll(io,C80_OWN,1,0,2000000,&r->own_last)) { rc=C80_OWN_TIMEOUT; goto done; }
++    r->glo_before=c80_read(io,C80_GLO); r->mask_before=c80_read(io,C80_MASK);
++    if(r->glo_before==0xffffffffu || (r->glo_before&15) || r->mask_before) {
++        rc=C80_BAD_DMA; goto done;
++    }
++    c80_stage(io,r,5);
++    /* Match OEM ordering: main EMI copies AFTER initial MCU/HIF ownership.
++     * Linux maps reserved EMI without a cacheable linear alias. */
++    for(i=2;i<4;++i) {
++        io->copy_emi(io->context,c80_blob_offsets[i],fw[i].data,fw[i].bytes);
++        r->main_crc[i-2]=io->crc_emi(io->context,c80_blob_offsets[i],fw[i].bytes);
++        if(r->main_crc[i-2]!=c80_blob_crcs[i]) { rc=C80_MAIN_CRC; goto done; }
++    }
++    c80_stage(io,r,6);
++    /* Global enable applies to every TX queue, including FWDL3. Refuse
++     * inherited descriptors on any other queue before enabling the engine. */
++    for(i=0;i<16;++i) if(c80_read(io,0x18004304+i*16)) {
++        rc=C80_RINGS_CONFIGURED; goto done;
++    }
++    for(i=0;i<4;++i) for(j=0;j<4;++j) {
++        r->rings_before[i][j]=c80_read(io,c80_ring_regs[i]+4*j);
++        if(r->rings_before[i][j]) { rc=C80_RINGS_CONFIGURED; goto done; }
++    }
++    for(i=0;i<C80_TX_N;++i) { io->pool->tx[i].ctrl=C80_DONE; io->pool->fwdl[i].ctrl=C80_DONE; }
++    for(i=0;i<2;++i) for(j=0;j<C80_RX_N;++j) {
++        io->pool->rx[i][j].addr=c80_dma_address(io,io->pool->data[i][j]);
++        io->pool->rx[i][j].ctrl=C80_RX_SIZE<<16;
++    }
++    r->rings_touched=1;
++    programmed[0][0]=c80_dma_address(io,io->pool->tx);
++    programmed[0][1]=C80_TX_N; programmed[0][2]=0;
++    for(i=0;i<2;++i) {
++        programmed[i+1][0]=c80_dma_address(io,io->pool->rx[i]);
++        programmed[i+1][1]=C80_RX_N; programmed[i+1][2]=C80_RX_N-1;
++    }
++    programmed[3][0]=c80_dma_address(io,io->pool->fwdl);
++    programmed[3][1]=C80_TX_N; programmed[3][2]=0;
++    for(i=0;i<4;++i) for(j=0;j<3;++j)
++        c80_write(io,c80_ring_regs[i]+4*j,programmed[i][j]);
++    for(i=0;i<4;++i) for(j=0;j<3;++j)
++        if(c80_read(io,c80_ring_regs[i]+4*j)!=programmed[i][j]) {
++            rc=C80_RING_PROGRAM; goto done;
++        }
++    if(c80_read(io,C80_MASK) || (c80_read(io,C80_GLO)&15)) {
++        rc=C80_BAD_DMA; goto done;
++    }
++    io->dma_order(io->context,1); r->dma_cfg_touched=1;
++    c80_write(io,C80_GLO,r->glo_before|0xc45); r->dma_started=1;
++    if((c80_read(io,C80_GLO)&0xc45)!=0xc45) { rc=C80_BAD_DMA; goto done; }
++    rc=c80_patch(io,r,&fw[4]);
++    if(!rc) rc=c80_main_firmware(io,r,&fw[5]);
++done:
++    r->primary=rc; c80_cleanup(io,r);
++    return r->critical?r->critical:r->cleanup?C80_RESTORE:rc;
++}
++#endif
+--- a/arch/arm/mach-mediatek/mediatek.c
++++ b/arch/arm/mach-mediatek/mediatek.c
+@@ -41,6 +41,7 @@
+ 	"mediatek,mt6589",
+ 	"mediatek,mt6592",
+ 	"mediatek,mt7623",
++	"mediatek,mt7626",
+ 	"mediatek,mt7629",
+ 	"mediatek,mt8127",
+ 	"mediatek,mt8135",
+--- a/arch/arm/mach-mediatek/Kconfig
++++ b/arch/arm/mach-mediatek/Kconfig
+@@ -27,6 +27,10 @@
+ 	bool "MediaTek MT7623 SoCs support"
+ 	default ARCH_MEDIATEK
+ 
++config MACH_MT7626
++	bool "Experimental MediaTek MT7626 RAM bring-up"
++	select HAVE_ARM_ARCH_TIMER
++
+ config MACH_MT7629
+ 	bool "MediaTek MT7629 SoCs support"
+ 	default ARCH_MEDIATEK
+--- a/arch/arm/boot/dts/mediatek/Makefile
++++ b/arch/arm/boot/dts/mediatek/Makefile
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
++dtb-$(CONFIG_MACH_MT7626) += mt7626-archer-c80-v1-ram.dtb
+ dtb-$(CONFIG_ARCH_MEDIATEK) += \
+ 	mt2701-evb.dtb \
+ 	mt6580-evbp1.dtb \
+--- a/drivers/tty/serial/8250/8250_mtk.c
++++ b/drivers/tty/serial/8250/8250_mtk.c
+@@ -522,9 +522,14 @@
+ 	struct resource *regs;
+ 	int irq, err;
+ 
+-	irq = platform_get_irq(pdev, 0);
+-	if (irq < 0)
+-		return irq;
++	/* Experimental C80 bring-up: use 8250 timer polling until IRQ is verified. */
++	if (of_property_read_bool(pdev->dev.of_node, "tplink,bringup-polling"))
++		irq = 0;
++	else {
++		irq = platform_get_irq(pdev, 0);
++		if (irq < 0)
++			return irq;
++	}
+ 
+ 	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	if (!regs) {
+--- a/drivers/net/ethernet/mediatek/Kconfig
++++ b/drivers/net/ethernet/mediatek/Kconfig
+@@ -34,3 +34,8 @@
+ 	  MediaTek MT85** SoCs.
+ 
+ endif #NET_VENDOR_MEDIATEK
++
++config C80_RAM_ETH
++	select MDIO_DEVICE
++	bool "Experimental C80 RAM PDMA IRQ/NAPI test"
++	depends on OF && ARCH_MEDIATEK && !SMP
+--- a/drivers/net/ethernet/mediatek/Makefile
++++ b/drivers/net/ethernet/mediatek/Makefile
+@@ -11,3 +11,6 @@
+ endif
+ obj-$(CONFIG_NET_MEDIATEK_SOC_WED) += mtk_wed_ops.o
+ obj-$(CONFIG_NET_MEDIATEK_STAR_EMAC) += mtk_star_emac.o
++
++obj-$(CONFIG_C80_RAM_ETH) += c80-ram-eth.o
++c80-ram-eth-y := c80_ram_eth.o c80_ram_mdio.o
+--- a/drivers/net/dsa/realtek/rtl8365mb.c
++++ b/drivers/net/dsa/realtek/rtl8365mb.c
+@@ -104,6 +104,7 @@
+ #include "realtek-smi.h"
+ #include "realtek-mdio.h"
+ #include "rtl83xx.h"
++#include "c80_rtl8367s.h"
+ 
+ /* Family-specific data and limits */
+ #define RTL8365MB_PHYADDRMAX		7
+@@ -653,6 +654,7 @@
+  * Private data for this driver.
+  */
+ struct rtl8365mb {
++	bool c80_inherited;
+ 	struct realtek_priv *priv;
+ 	int irq;
+ 	const struct rtl8365mb_chip_info *chip_info;
+@@ -660,6 +662,27 @@
+ 	struct mutex mib_lock;
+ 	struct rtl8365mb_port ports[RTL8365MB_MAX_NUM_PORTS];
+ };
++
++/* C80 RAM inherited HSGMII */
++static int rtl8365mb_c80_read(void *ctx, unsigned int reg, unsigned int *value)
++{
++	struct realtek_priv *priv = ctx;
++	return regmap_read(priv->map_nolock, reg, value);
++}
++static int rtl8365mb_c80_write(void *ctx, unsigned int reg, unsigned int value)
++{
++	struct realtek_priv *priv = ctx;
++	return regmap_write(priv->map_nolock, reg, value);
++}
++static int rtl8365mb_c80_force(struct realtek_priv *priv, bool up)
++{
++	struct c80_rtl_io io = { priv, rtl8365mb_c80_read, rtl8365mb_c80_write };
++	int ret;
++	rtl83xx_lock(priv);
++	ret = c80_rtl_link(&io, up);
++	rtl83xx_unlock(priv);
++	return ret;
++}
+ 
+ static int rtl8365mb_phy_poll_busy(struct realtek_priv *priv)
+ {
+@@ -1038,6 +1061,12 @@
+ 	const struct rtl8365mb_extint *extint =
+ 		rtl8365mb_get_port_extint(ds->priv, port);
+ 
++	if (((struct rtl8365mb *)((struct realtek_priv *)ds->priv)->chip_data)->c80_inherited && port == 6) {
++		config->mac_capabilities = MAC_2500FD;
++		__set_bit(PHY_INTERFACE_MODE_2500BASEX, config->supported_interfaces);
++		return;
++	}
++
+ 	config->mac_capabilities = MAC_SYM_PAUSE | MAC_ASYM_PAUSE |
+ 				   MAC_10 | MAC_100 | MAC_1000FD;
+ 
+@@ -1075,6 +1104,12 @@
+ 		dev_err(priv->dev,
+ 			"port %d supports only conventional PHY or fixed-link\n",
+ 			port);
++		return;
++	}
++
++	if (((struct rtl8365mb *)priv->chip_data)->c80_inherited && port == 6) {
++		if (mode != MLO_AN_FIXED || state->interface != PHY_INTERFACE_MODE_2500BASEX)
++			dev_err(priv->dev, "C80 CPU port requires fixed 2500base-x\n");
+ 		return;
+ 	}
+ 
+@@ -1107,6 +1142,13 @@
+ 	p = &mb->ports[port];
+ 	cancel_delayed_work_sync(&p->mib_work);
+ 
++	if (mb->c80_inherited && port == 6) {
++		ret = rtl8365mb_c80_force(priv, false);
++		if (ret)
++			dev_err(priv->dev, "C80 CPU link down failed: %d\n", ret);
++		return;
++	}
++
+ 	if (phy_interface_mode_is_rgmii(interface)) {
+ 		ret = rtl8365mb_ext_config_forcemode(priv, port, false, 0, 0,
+ 						     false, false);
+@@ -1136,6 +1178,16 @@
+ 	mb = priv->chip_data;
+ 	p = &mb->ports[port];
+ 	schedule_delayed_work(&p->mib_work, 0);
++
++	if (mb->c80_inherited && port == 6) {
++		ret = -EINVAL;
++		if (interface == PHY_INTERFACE_MODE_2500BASEX && speed == SPEED_2500 &&
++		    duplex == DUPLEX_FULL && !tx_pause && !rx_pause)
++			ret = rtl8365mb_c80_force(priv, true);
++		if (ret)
++			dev_err(priv->dev, "C80 CPU link up failed: %d\n", ret);
++		return;
++	}
+ 
+ 	if (phy_interface_mode_is_rgmii(interface)) {
+ 		ret = rtl8365mb_ext_config_forcemode(priv, port, true, speed,
+@@ -1964,6 +2016,18 @@
+ 	mb = priv->chip_data;
+ 	cpu = &mb->cpu;
+ 
++	if (mb->c80_inherited) {
++		/* Keep the bootloader's measured analog/MCU settings. DSA owns
++		 * CPU tags, isolation, STP and PHY management from this point. */
++		ret = regmap_update_bits(priv->map, 0x07a8, BIT(0), 0);
++		if (!ret)
++			ret = regmap_update_bits(priv->map, 0x07a9, 0x07ff, 0);
++		if (ret)
++			return ret;
++		dev_info(priv->dev, "C80 RAM: inherited HSGMII, reset/jam skipped, VLAN filtering disabled\n");
++		goto c80_configure;
++	}
++
+ 	ret = rtl8365mb_reset_chip(priv);
+ 	if (ret) {
+ 		dev_err(priv->dev, "failed to reset chip: %d\n", ret);
+@@ -1977,8 +2041,9 @@
+ 		goto out_error;
+ 	}
+ 
++c80_configure:
+ 	/* Set up cascading IRQs */
+-	ret = rtl8365mb_irq_setup(priv);
++	ret = mb->c80_inherited ? -EOPNOTSUPP : rtl8365mb_irq_setup(priv);
+ 	if (ret == -EPROBE_DEFER)
+ 		return ret;
+ 	else if (ret)
+@@ -2089,7 +2154,16 @@
+ 	int ret;
+ 	int i;
+ 
+-	ret = rtl8365mb_get_chip_id_and_ver(priv->map, &chip_id, &chip_ver);
++	mb->c80_inherited = of_property_read_bool(priv->dev->of_node,
++						 "tplink,c80-ram-inherit-hsgmii");
++	if (mb->c80_inherited) {
++		struct c80_rtl_io io = { priv, rtl8365mb_c80_read, rtl8365mb_c80_write };
++		rtl83xx_lock(priv);
++		ret = c80_rtl_guard(&io, &chip_id, &chip_ver);
++		rtl83xx_unlock(priv);
++	} else {
++		ret = rtl8365mb_get_chip_id_and_ver(priv->map, &chip_id, &chip_ver);
++	}
+ 	if (ret) {
+ 		dev_err(priv->dev, "failed to read chip id and version: %d\n",
+ 			ret);
+--- /dev/null
++++ b/arch/arm/boot/dts/mediatek/mt7626-archer-c80-v1-ram.dts
+@@ -0,0 +1,163 @@
++// SPDX-License-Identifier: GPL-2.0-only
++// Minimal experimental RAM-boot description, not a complete OpenWrt board DTS.
++/dts-v1/;
++#include <dt-bindings/interrupt-controller/arm-gic.h>
++
++/ {
++    model = "TP-Link Archer C80 v1 RU experimental RAM bring-up";
++    compatible = "tplink,archer-c80-v1", "mediatek,mt7626";
++    #address-cells = <1>;
++    #size-cells = <1>;
++    interrupt-parent = <&gic>;
++
++    aliases { serial0 = &uart0; };
++    chosen {
++        stdout-path = "serial0:115200n8";
++        linux,usable-memory-range = <0x40200000 0x01e00000>;
++        bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 loglevel=8 rdinit=/init panic=0 clk_ignore_unused";
++    };
++
++    memory@40000000 {
++        device_type = "memory";
++        reg = <0x40000000 0x02000000>;
++    };
++
++    // Preserve the factory 2MiB CONNSYS EMI window before any Wi-Fi setup.
++    reserved-memory {
++        #address-cells = <1>;
++        #size-cells = <1>;
++        ranges;
++        conn_emi: memory@40000000 {
++            reg = <0x40000000 0x00200000>;
++            no-map;
++        };
++    };
++
++    cpus {
++        #address-cells = <1>;
++        #size-cells = <0>;
++        cpu@0 {
++            device_type = "cpu";
++            compatible = "arm,cortex-a7";
++            reg = <0>;
++        };
++    };
++
++    uart_clk: uart-clock {
++        compatible = "fixed-clock";
++        #clock-cells = <0>;
++        clock-frequency = <40000000>;
++    };
++
++    timer {
++        compatible = "arm,armv7-timer";
++        interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
++                     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
++                     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
++                     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>;
++        clock-frequency = <20000000>;
++    };
++
++    soc {
++        compatible = "simple-bus";
++        #address-cells = <1>;
++        #size-cells = <1>;
++        ranges;
++
++        restart-controller@10212000 {
++            compatible = "tplink,c80-mt7626-restart";
++            reg = <0x10212000 0x18>;
++        };
++
++        wifi-test@18000000 {
++            compatible = "tplink,c80-mcu-transport-test";
++            reg = <0x18000000 0x00100000>,
++                  <0x10000000 0x00001000>,
++                  <0x10006000 0x00001000>,
++                  <0x10212018 4>,
++                  <0x10210000 0x00001000>;
++            memory-region = <&conn_emi>;
++            status = "okay";
++        };
++
++        // Temporary read-only view of the factory-configured SPI NOR aperture.
++        // This does not describe the SPI controller or enable NOR write opcodes.
++        flash@30000000 {
++            compatible = "mtd-rom";
++            reg = <0x30000000 0x00400000>;
++            bank-width = <1>;
++        };
++
++        // Temporary diagnostic PDMA driver: retain the working U-Boot MAC/PCS.
++        gmac: ethernet@1b100000 {
++            compatible = "tplink,c80-ram-pdma";
++            reg = <0x1b100000 0x20000>, <0x1b128000 0x200>, <0x1b000000 0x1000>;
++            reg-names = "fe", "sgmii", "ethsys";
++            interrupt-parent = <&sysirq>;
++            interrupts = <GIC_SPI 223 IRQ_TYPE_LEVEL_LOW>;
++            tplink,dsa-conduit;
++            status = "okay";
++            mdio {
++                #address-cells = <1>;
++                #size-cells = <0>;
++                switch@1d {
++                    compatible = "realtek,rtl8365mb";
++                    reg = <29>;
++                    tplink,c80-ram-inherit-hsgmii;
++                    ports {
++                        #address-cells = <1>;
++                        #size-cells = <0>;
++                        port@0 { reg = <0>; label = "wan"; phy-mode = "internal"; phy-handle = <&phy0>; };
++                        port@1 { reg = <1>; label = "lan1"; phy-mode = "internal"; phy-handle = <&phy1>; };
++                        port@2 { reg = <2>; label = "lan2"; phy-mode = "internal"; phy-handle = <&phy2>; };
++                        port@3 { reg = <3>; label = "lan3"; phy-mode = "internal"; phy-handle = <&phy3>; };
++                        port@4 { reg = <4>; label = "lan4"; phy-mode = "internal"; phy-handle = <&phy4>; };
++                        port@6 {
++                            reg = <6>;
++                            ethernet = <&gmac>;
++                            phy-mode = "2500base-x";
++                            fixed-link { speed = <2500>; full-duplex; };
++                        };
++                    };
++                    mdio {
++                        #address-cells = <1>;
++                        #size-cells = <0>;
++                        phy0: ethernet-phy@0 { reg = <0>; };
++                        phy1: ethernet-phy@1 { reg = <1>; };
++                        phy2: ethernet-phy@2 { reg = <2>; };
++                        phy3: ethernet-phy@3 { reg = <3>; };
++                        phy4: ethernet-phy@4 { reg = <4>; };
++                    };
++                };
++            };
++        };
++
++        // Address independently identified in installed TPOS polarity code.
++        sysirq: interrupt-controller@10200a80 {
++            compatible = "mediatek,mt7626-sysirq", "mediatek,mt6577-sysirq";
++            reg = <0x10200a80 0x20>;
++            interrupt-controller;
++            #interrupt-cells = <3>;
++            #address-cells = <0>;
++            interrupt-parent = <&gic>;
++        };
++
++        gic: interrupt-controller@10310000 {
++            compatible = "arm,gic-400";
++            reg = <0x10310000 0x1000>, <0x10320000 0x1000>;
++            interrupt-controller;
++            #interrupt-cells = <3>;
++            #address-cells = <0>;
++        };
++
++        uart0: serial@11002000 {
++            compatible = "mediatek,mt6577-uart";
++            reg = <0x11002000 0x400>;
++            clocks = <&uart_clk>, <&uart_clk>;
++            clock-names = "baud", "bus";
++            // Temporary opt-in for the local driver patch: no guessed UART IRQ.
++            tplink,bringup-polling;
++            status = "okay";
++        };
++    };
++};
+--- /dev/null
++++ b/drivers/net/ethernet/mediatek/c80_ram_eth.c
+@@ -0,0 +1,623 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Temporary Archer C80/MT7626 Linux RAM test of the confirmed PDMA path.
++ * Requires TFTP to have configured MAC/SGMII/RTL8367S. No clocks, resets,
++ * PCS or NOR programming is performed here. Separate MDIO management provides
++ * snapshots and an explicit CPU-link test while DMA is stopped. The measured
++ * common IRQ uses the standard MediaTek sysirq polarity controller.
++ * Register offsets and 16-byte descriptor fields follow the C80 GPL BSP.
++ */
++#include <linux/dma-mapping.h>
++#include <linux/etherdevice.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/interrupt.h>
++#include <linux/irq.h>
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/netdevice.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/skbuff.h>
++#include <linux/rtnetlink.h>
++#include <linux/string.h>
++
++#include "c80_pdma_core.h"
++#include "c80_ram_mdio.h"
++
++#define TX_BASE 0x0800
++#define TX_COUNT 0x0804
++#define TX_CPU 0x0808
++#define TX_DMA 0x080c
++#define RX_BASE 0x0900
++#define RX_COUNT 0x0904
++#define RX_CPU 0x0908
++#define RX_DMA 0x090c
++#define DMA_CFG 0x0a04
++#define DMA_RESET_IDX 0x0a08
++#define DMA_IRQ_STATUS 0x0a20
++#define DMA_IRQ_MASK 0x0a28
++#define DMA_IRQ_DONE 0x00010001
++#define FE_IRQ_GROUP 0x0020
++#define DMA_IRQ_GROUP0 0x0a50
++#define DMA_IRQ_GROUP1 0x0a54
++#define GDM_FWD 0x0500
++#define GDM_MAC_LO 0x0508
++#define GDM_MAC_HI 0x050c
++#define GMAC_CTRL 0x10100
++#define GMAC_STATUS 0x10108
++
++enum { TX_DESC, RX_DESC, TX_BUFFER, RX_BUFFER, BLOCK_COUNT };
++static const size_t block_sizes[BLOCK_COUNT] = {
++	C80_TX_COUNT * sizeof(struct c80_desc), C80_RX_COUNT * sizeof(struct c80_desc),
++	C80_TX_COUNT * C80_BUFFER_SIZE, C80_RX_COUNT * C80_BUFFER_SIZE,
++};
++
++struct c80_block { void *cpu; dma_addr_t dma; };
++struct c80_ram_eth {
++	struct net_device *ndev;
++	struct device *dev;
++	void __iomem *fe, *pcs, *ethsys;
++	struct mii_bus *mdio;
++	bool dsa;
++	struct c80_block block[BLOCK_COUNT];
++	struct c80_desc *txd, *rxd;
++	spinlock_t lock;
++	struct napi_struct napi;
++	int irq, pending_check;
++	unsigned int tx_head, tx_tail, tx_pending, rx_next;
++	unsigned short tx_bytes[C80_TX_COUNT];
++	u32 saved_fwd, last_rx_info, timeout_count;
++	u32 irq_count, irq_tx, irq_rx, irq_faults, napi_polls;
++	u32 rx_realtek, rx_untagged;
++	bool running, irq_enabled, napi_enabled, irq_fault;
++};
++
++static u32 c80_read(struct c80_ram_eth *p, unsigned int reg)
++{
++	return readl(p->fe + reg);
++}
++
++static void c80_write(struct c80_ram_eth *p, unsigned int reg, u32 value)
++{
++	writel(value, p->fe + reg);
++}
++
++static bool c80_guard(struct c80_ram_eth *p)
++{
++	u32 route = readl(p->ethsys + 0x14), mcr = c80_read(p, GMAC_CTRL);
++	u32 pcs = readl(p->pcs), mode = readl(p->pcs + 0x20);
++	u32 power = readl(p->pcs + 0xe8), ana = readl(p->pcs + 0x128);
++	u32 pdma = c80_read(p, DMA_CFG);
++
++	if (readl(p->pcs + 4) != 0x4d544950 ||
++	    (readl(p->pcs + 0x14) >> 16) != 1 ||
++	    !c80_inherited_state_ok(route, mcr, pcs, mode, power, ana, pdma)) {
++		dev_err(p->dev, "inherited Ethernet state differs: route=%08x mcr=%08x pcs=%08x mode=%08x power=%08x ana=%08x pdma=%08x\n",
++			route, mcr, pcs, mode, power, ana, pdma);
++		return false;
++	}
++	if (c80_read(p, FE_IRQ_GROUP) || c80_read(p, DMA_IRQ_GROUP0) ||
++	    c80_read(p, DMA_IRQ_GROUP1) || c80_read(p, DMA_IRQ_MASK)) {
++		dev_err(p->dev, "IRQ grouping/mask differs from measured inherited ID255 path\n");
++		return false;
++	}
++	return true;
++}
++
++/* This UP-only test's sysirq/GIC chips have no sleeping bus-lock callbacks.
++ * Temporarily enable only this line while local CPU IRQs stay disabled;
++ * reject an asserted idle line before installing rings or starting DMA.
++ */
++static int c80_check_idle_irq(struct c80_ram_eth *p)
++{
++	unsigned long flags;
++	bool pending = true;
++	int ret;
++
++	local_irq_save(flags);
++	enable_irq(p->irq);
++	udelay(10);
++	ret = irq_get_irqchip_state(p->irq, IRQCHIP_STATE_PENDING, &pending);
++	disable_irq_nosync(p->irq);
++	local_irq_restore(flags);
++	p->pending_check = ret ? ret : pending;
++	if (ret || pending) {
++		dev_err(p->dev, "idle IRQ check failed: rc=%d pending=%u; DMA not started\n", ret, pending);
++		return -EIO;
++	}
++	return 0;
++}
++
++static void c80_irq_fault(struct c80_ram_eth *p)
++{
++	if (!p->irq_fault)
++		netdev_err(p->ndev, "IRQ without PDMA done status; IRQ disabled, use netdown\n");
++	p->irq_fault = true;
++	p->irq_faults++;
++	c80_write(p, DMA_IRQ_MASK, 0);
++	if (p->irq_enabled) {
++		p->irq_enabled = false;
++		disable_irq_nosync(p->irq);
++	}
++	netif_stop_queue(p->ndev);
++}
++
++static irqreturn_t c80_irq(int irq, void *data)
++{
++	struct c80_ram_eth *p = data;
++	u32 status = c80_read(p, DMA_IRQ_STATUS) & DMA_IRQ_DONE;
++
++	c80_write(p, DMA_IRQ_MASK, 0);
++	c80_read(p, DMA_IRQ_MASK); /* Flush masking before GIC EOI. */
++	if (!status) {
++		c80_irq_fault(p);
++		return IRQ_HANDLED;
++	}
++	p->irq_count++;
++	if (status & 1)
++		p->irq_tx++;
++	if (status & 0x10000)
++		p->irq_rx++;
++	if (READ_ONCE(p->running) && !READ_ONCE(p->irq_fault))
++		napi_schedule_irqoff(&p->napi);
++	return IRQ_HANDLED;
++}
++
++static int c80_dma_quiet(struct c80_ram_eth *p)
++{
++	u32 value = c80_read(p, DMA_CFG);
++
++	c80_write(p, DMA_CFG, value & ~C80_DMA_ENABLE);
++	return readl_poll_timeout(p->fe + DMA_CFG, value,
++				 !(value & (C80_DMA_BUSY | C80_DMA_ENABLE)), 20, 100000);
++}
++
++/* Caller has proved DMA quiet, or has never installed these buffers. */
++static void c80_free_buffers(struct c80_ram_eth *p)
++{
++	int i;
++
++	for (i = 0; i < BLOCK_COUNT; i++) {
++		if (!p->block[i].cpu)
++			continue;
++		dma_free_coherent(p->dev, block_sizes[i], p->block[i].cpu, p->block[i].dma);
++		p->block[i].cpu = NULL;
++	}
++	p->txd = NULL;
++	p->rxd = NULL;
++}
++
++static int c80_alloc_buffers(struct c80_ram_eth *p)
++{
++	unsigned int i;
++
++	for (i = 0; i < BLOCK_COUNT; i++) {
++		p->block[i].cpu = dma_alloc_coherent(p->dev, block_sizes[i],
++						    &p->block[i].dma, GFP_KERNEL);
++		if (!p->block[i].cpu) {
++			c80_free_buffers(p);
++			return -ENOMEM;
++		}
++		memset(p->block[i].cpu, 0, block_sizes[i]);
++	}
++	p->txd = p->block[TX_DESC].cpu;
++	p->rxd = p->block[RX_DESC].cpu;
++	for (i = 0; i < C80_TX_COUNT; i++) {
++		p->txd[i].word[0] = p->block[TX_BUFFER].dma + i * C80_BUFFER_SIZE;
++		p->txd[i].word[1] = C80_DDONE | C80_LAST;
++		p->txd[i].word[3] = C80_TX_PORT1;
++	}
++	for (i = 0; i < C80_RX_COUNT; i++) {
++		p->rxd[i].word[0] = p->block[RX_BUFFER].dma + i * C80_BUFFER_SIZE;
++		p->rxd[i].word[1] = C80_BUFFER_SIZE << 16;
++	}
++	p->tx_head = p->tx_tail = p->tx_pending = p->rx_next = 0;
++	return 0;
++}
++
++static int c80_poll(struct napi_struct *napi, int budget)
++{
++	struct c80_ram_eth *p = container_of(napi, struct c80_ram_eth, napi);
++	struct net_device *ndev = p->ndev;
++	unsigned long flags;
++	int work = 0;
++	u32 status;
++
++	p->napi_polls++;
++	if (!READ_ONCE(p->running) || READ_ONCE(p->irq_fault)) {
++		if (budget)
++			napi_complete_done(napi, 0);
++		return 0;
++	}
++	/* Acknowledge before draining rings: a later completion remains latched
++	 * across the final empty-ring check and interrupt rearm. Budget-zero
++	 * calls reclaim TX only and must not acknowledge or complete RX NAPI.
++	 */
++	if (budget) {
++		status = c80_read(p, DMA_IRQ_STATUS) & DMA_IRQ_DONE;
++		if (status)
++			c80_write(p, DMA_IRQ_STATUS, status);
++	}
++	spin_lock(&p->lock);
++	while (p->tx_pending && (READ_ONCE(p->txd[p->tx_tail].word[1]) & C80_DDONE)) {
++		dma_rmb();
++		ndev->stats.tx_packets++;
++		ndev->stats.tx_bytes += p->tx_bytes[p->tx_tail];
++		p->tx_tail = c80_next(p->tx_tail, C80_TX_COUNT);
++		p->tx_pending--;
++	}
++	if (netif_queue_stopped(ndev) && p->tx_pending < C80_TX_COUNT - 1)
++		netif_wake_queue(ndev);
++	spin_unlock(&p->lock);
++	if (!budget)
++		return 0;
++
++	while (work < budget) {
++		struct c80_desc *desc = &p->rxd[p->rx_next];
++		u32 control = READ_ONCE(desc->word[1]);
++		unsigned int size;
++		struct sk_buff *skb;
++
++		if (!(control & C80_DDONE))
++			break;
++		dma_rmb();
++		size = c80_rx_length(control);
++		p->last_rx_info = READ_ONCE(desc->word[3]);
++		if (!size || ((p->last_rx_info >> 19) & 7) == 6) {
++			ndev->stats.rx_errors++;
++			ndev->stats.rx_dropped++;
++		} else {
++			skb = netdev_alloc_skb_ip_align(ndev, size);
++			if (!skb) {
++				ndev->stats.rx_dropped++;
++			} else {
++				memcpy(skb_put(skb, size), p->block[RX_BUFFER].cpu +
++				       p->rx_next * C80_BUFFER_SIZE, size);
++				if (p->dsa) {
++					unsigned char *frame = p->block[RX_BUFFER].cpu + p->rx_next * C80_BUFFER_SIZE;
++					if (size >= 22 && frame[12] == 0x88 && frame[13] == 0x99 && frame[14] == 4)
++						p->rx_realtek++;
++					else
++						p->rx_untagged++;
++				}
++				skb->protocol = eth_type_trans(skb, ndev);
++				skb->ip_summed = CHECKSUM_NONE;
++				ndev->stats.rx_packets++;
++				ndev->stats.rx_bytes += size;
++				napi_gro_receive(napi, skb);
++			}
++		}
++		WRITE_ONCE(desc->word[3], 0);
++		dma_wmb();
++		WRITE_ONCE(desc->word[1], C80_BUFFER_SIZE << 16);
++		dma_wmb();
++		c80_write(p, RX_CPU, p->rx_next);
++		p->rx_next = c80_next(p->rx_next, C80_RX_COUNT);
++		work++;
++	}
++	if (work < budget && napi_complete_done(napi, work)) {
++		local_irq_save(flags);
++		if (READ_ONCE(p->running) && !READ_ONCE(p->irq_fault))
++			c80_write(p, DMA_IRQ_MASK, DMA_IRQ_DONE);
++		local_irq_restore(flags);
++	}
++	return work;
++}
++
++static netdev_tx_t c80_xmit(struct sk_buff *skb, struct net_device *ndev)
++{
++	struct c80_ram_eth *p = netdev_priv(ndev);
++	unsigned int size = c80_tx_length(skb->len), index;
++	void *buffer;
++
++	if (!size) {
++		ndev->stats.tx_dropped++;
++		dev_kfree_skb_any(skb);
++		return NETDEV_TX_OK;
++	}
++	if (p->dsa && size < 68)
++		size = 68; /* Preserve a minimum 60-byte Ethernet frame after stripping the tag. */
++	spin_lock_bh(&p->lock);
++	if (unlikely(p->tx_pending >= C80_TX_COUNT - 1)) {
++		netif_stop_queue(ndev);
++		spin_unlock_bh(&p->lock);
++		return NETDEV_TX_BUSY;
++	}
++	index = p->tx_head;
++	buffer = p->block[TX_BUFFER].cpu + index * C80_BUFFER_SIZE;
++	if (unlikely(skb_copy_bits(skb, 0, buffer, skb->len))) {
++		ndev->stats.tx_dropped++;
++		spin_unlock_bh(&p->lock);
++		dev_kfree_skb_any(skb);
++		return NETDEV_TX_OK;
++	}
++	if (size > skb->len)
++		memset(buffer + skb->len, 0, size - skb->len);
++	p->tx_bytes[index] = skb->len;
++	dma_wmb();
++	WRITE_ONCE(p->txd[index].word[1], c80_tx_control(size));
++	dma_wmb();
++	p->tx_head = c80_next(index, C80_TX_COUNT);
++	p->tx_pending++;
++	c80_write(p, TX_CPU, p->tx_head);
++	if (p->tx_pending == C80_TX_COUNT - 1)
++		netif_stop_queue(ndev);
++	spin_unlock_bh(&p->lock);
++	dev_kfree_skb_any(skb);
++	return NETDEV_TX_OK;
++}
++
++static int c80_open(struct net_device *ndev)
++{
++	struct c80_ram_eth *p = netdev_priv(ndev);
++	int ret;
++
++	if (p->block[0].cpu) {
++		if (c80_dma_quiet(p))
++			return -EBUSY;
++		c80_free_buffers(p);
++	}
++	if (!c80_mdio_ready(p->mdio))
++		return -EUCLEAN;
++	if (!c80_guard(p))
++		return -EINVAL;
++	c80_write(p, DMA_IRQ_MASK, 0);
++	c80_write(p, DMA_IRQ_STATUS, DMA_IRQ_DONE);
++	if (c80_read(p, DMA_IRQ_STATUS) & DMA_IRQ_DONE) {
++		dev_err(p->dev, "PDMA done status did not clear while DMA halted\n");
++		return -EIO;
++	}
++	ret = c80_check_idle_irq(p);
++	if (ret)
++		return ret;
++	ret = c80_alloc_buffers(p);
++	if (ret)
++		return ret;
++	p->saved_fwd = c80_read(p, GDM_FWD);
++	c80_write(p, DMA_IRQ_MASK, 0);
++	c80_write(p, GDM_FWD, p->saved_fwd & ~C80_GDMA_ROUTE_MASK);
++	dma_wmb();
++	c80_write(p, TX_BASE, p->block[TX_DESC].dma);
++	c80_write(p, TX_COUNT, C80_TX_COUNT);
++	c80_write(p, TX_CPU, 0);
++	c80_write(p, RX_BASE, p->block[RX_DESC].dma);
++	c80_write(p, RX_COUNT, C80_RX_COUNT);
++	c80_write(p, RX_CPU, C80_RX_COUNT - 1);
++	c80_write(p, DMA_RESET_IDX, (1 << 16) | 1);
++	p->irq_fault = false;
++	napi_enable(&p->napi);
++	p->napi_enabled = true;
++	WRITE_ONCE(p->running, true);
++	c80_write(p, DMA_CFG, 0x00001410 | C80_DMA_ENABLE);
++	netif_carrier_on(ndev);
++	netif_start_queue(ndev);
++	p->irq_enabled = true;
++	enable_irq(p->irq);
++	c80_write(p, DMA_IRQ_MASK, DMA_IRQ_DONE);
++	netdev_info(ndev, "RAM PDMA IRQ/NAPI enabled (irq=%d, GIC ID255); inherited CPU-switch path\n", p->irq);
++	return 0;
++}
++
++static int c80_stop(struct net_device *ndev)
++{
++	struct c80_ram_eth *p = netdev_priv(ndev);
++	unsigned long flags;
++
++	netif_tx_disable(ndev);
++	netif_carrier_off(ndev);
++	WRITE_ONCE(p->running, false);
++	c80_write(p, DMA_IRQ_MASK, 0);
++	local_irq_save(flags);
++	if (p->irq_enabled) {
++		p->irq_enabled = false;
++		disable_irq_nosync(p->irq);
++	}
++	local_irq_restore(flags);
++	synchronize_irq(p->irq);
++	if (p->napi_enabled) {
++		napi_disable(&p->napi);
++		p->napi_enabled = false;
++	}
++	if (c80_dma_quiet(p)) {
++		/* Never release memory which a stuck DMA engine can still access. */
++		netdev_err(ndev, "DMA did not stop; buffers pinned until reset\n");
++		return -EBUSY;
++	}
++	c80_write(p, GDM_FWD, p->saved_fwd);
++	c80_free_buffers(p);
++	return 0;
++}
++
++static void c80_timeout(struct net_device *ndev, unsigned int queue)
++{
++	struct c80_ram_eth *p = netdev_priv(ndev);
++
++	p->timeout_count++;
++	netdev_err(ndev, "TX timeout: head=%u tail=%u pending=%u, ctx=%u dtx=%u\n",
++		   p->tx_head, p->tx_tail, p->tx_pending,
++		   c80_read(p, TX_CPU), c80_read(p, TX_DMA));
++}
++
++static void c80_get_stats(struct net_device *ndev, struct rtnl_link_stats64 *out)
++{
++	struct c80_ram_eth *p = netdev_priv(ndev);
++
++	spin_lock_bh(&p->lock);
++	netdev_stats_to_stats64(out, &ndev->stats);
++	spin_unlock_bh(&p->lock);
++}
++
++static const struct net_device_ops c80_netdev_ops = {
++	.ndo_open = c80_open, .ndo_stop = c80_stop, .ndo_start_xmit = c80_xmit,
++	.ndo_get_stats64 = c80_get_stats, .ndo_tx_timeout = c80_timeout,
++	.ndo_validate_addr = eth_validate_addr,
++};
++
++static ssize_t ram_state_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct c80_ram_eth *p = dev_get_drvdata(dev);
++	ssize_t count;
++	unsigned long flags;
++
++	spin_lock_irqsave(&p->lock, flags);
++	count = sysfs_emit(buf,
++		"running=%u pools=%u tx_head=%u tx_tail=%u tx_pending=%u rx_next=%u timeouts=%u\n"
++		"pdma=%08x tx_ctx=%08x tx_dtx=%08x rx_calc=%08x rx_drx=%08x irq_mask=%08x\n"
++		"mcr=%08x msr=%08x route=%08x pcs=%08x mode=%08x ana=%08x last_rx_info=%08x\n"
++		"irq=%d irq_enabled=%u events=%u tx_events=%u rx_events=%u napi_polls=%u irq_fault=%u faults=%u idle_pending=%d irq_status=%08x\n"
++		"dsa_conduit=%u max_mtu=%u rx_realtek=%u rx_untagged=%u\n",
++		p->running, !!p->block[0].cpu, p->tx_head, p->tx_tail, p->tx_pending, p->rx_next, p->timeout_count,
++		c80_read(p, DMA_CFG), c80_read(p, TX_CPU), c80_read(p, TX_DMA),
++		c80_read(p, RX_CPU), c80_read(p, RX_DMA), c80_read(p, DMA_IRQ_MASK),
++		c80_read(p, GMAC_CTRL), c80_read(p, GMAC_STATUS), readl(p->ethsys + 0x14),
++		readl(p->pcs), readl(p->pcs + 0x20), readl(p->pcs + 0x128), p->last_rx_info,
++		p->irq, p->irq_enabled, p->irq_count, p->irq_tx, p->irq_rx, p->napi_polls,
++		p->irq_fault, p->irq_faults, p->pending_check, c80_read(p, DMA_IRQ_STATUS),
++		p->dsa, p->ndev->max_mtu, p->rx_realtek, p->rx_untagged);
++	spin_unlock_irqrestore(&p->lock, flags);
++	return count;
++}
++static DEVICE_ATTR_RO(ram_state);
++static ssize_t switch_state_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct c80_ram_eth *p = dev_get_drvdata(dev);
++
++	return c80_mdio_snapshot(p->mdio, buf);
++}
++static DEVICE_ATTR_RO(switch_state);
++static ssize_t cpu_link_test_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct c80_ram_eth *p = dev_get_drvdata(dev);
++
++	return c80_mdio_link_state(p->mdio, buf);
++}
++
++static ssize_t cpu_link_test_store(struct device *dev, struct device_attribute *attr,
++				 const char *buf, size_t count)
++{
++	struct c80_ram_eth *p = dev_get_drvdata(dev);
++	int ret = 0;
++
++	if (p->dsa)
++		return -EOPNOTSUPP; /* CPU link is owned by DSA/phylink. */
++	if (count != 5 || memcmp(buf, "test\n", 5))
++		return -EINVAL;
++	rtnl_lock();
++	if (netif_running(p->ndev) || p->running || p->block[0].cpu || p->irq_enabled)
++		ret = -EBUSY;
++	else if (!c80_guard(p))
++		ret = -EINVAL;
++	else
++		/* Accepted action: diagnostic result is read from the paired file. */
++		c80_mdio_link_test(p->mdio);
++	rtnl_unlock();
++	if (ret)
++		return ret;
++	return count;
++}
++static DEVICE_ATTR_RW(cpu_link_test);
++static struct attribute *c80_attrs[] = {
++	&dev_attr_ram_state.attr, &dev_attr_switch_state.attr,
++	&dev_attr_cpu_link_test.attr, NULL
++};
++static const struct attribute_group c80_group = { .attrs = c80_attrs };
++
++static int c80_probe(struct platform_device *pdev)
++{
++	struct net_device *ndev;
++	struct c80_ram_eth *p;
++	u32 hi, lo;
++	u8 address[ETH_ALEN];
++	int ret;
++
++	BUILD_BUG_ON(sizeof(struct c80_desc) != 16);
++	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
++	if (ret)
++		return ret;
++	ndev = alloc_etherdev(sizeof(*p));
++	if (!ndev)
++		return -ENOMEM;
++	p = netdev_priv(ndev);
++	p->ndev = ndev;
++	p->dev = &pdev->dev;
++	p->dsa = of_property_read_bool(pdev->dev.of_node, "tplink,dsa-conduit");
++	p->pending_check = -1;
++	p->fe = devm_platform_ioremap_resource_byname(pdev, "fe");
++	p->pcs = devm_platform_ioremap_resource_byname(pdev, "sgmii");
++	p->ethsys = devm_platform_ioremap_resource_byname(pdev, "ethsys");
++	if (IS_ERR(p->fe) || IS_ERR(p->pcs) || IS_ERR(p->ethsys)) {
++		ret = -ENODEV;
++		goto free;
++	}
++	if (!c80_guard(p)) {
++		ret = -EINVAL;
++		goto free;
++	}
++	p->irq = platform_get_irq(pdev, 0);
++	if (p->irq < 0) {
++		ret = p->irq;
++		goto free;
++	}
++	hi = c80_read(p, GDM_MAC_HI);
++	lo = c80_read(p, GDM_MAC_LO);
++	address[0] = hi >> 8; address[1] = hi;
++	address[2] = lo >> 24; address[3] = lo >> 16;
++	address[4] = lo >> 8; address[5] = lo;
++	if (!is_valid_ether_addr(address)) {
++		dev_err(&pdev->dev, "invalid inherited GDMA1 MAC address\n");
++		ret = -EINVAL;
++		goto free;
++	}
++	eth_hw_addr_set(ndev, address);
++	SET_NETDEV_DEV(ndev, &pdev->dev);
++	ndev->netdev_ops = &c80_netdev_ops;
++	ndev->watchdog_timeo = 5 * HZ;
++	ndev->min_mtu = ETH_MIN_MTU;
++	ndev->max_mtu = p->dsa ? ETH_DATA_LEN + 8 : ETH_DATA_LEN;
++	ndev->features = 0;
++	ndev->hw_features = 0;
++	spin_lock_init(&p->lock);
++	netif_napi_add_weight(ndev, &p->napi, c80_poll, 64);
++	ret = request_irq(p->irq, c80_irq, IRQF_NO_AUTOEN | IRQF_NO_THREAD | IRQF_TRIGGER_LOW,
++			  "c80-ram-pdma", p);
++	if (ret)
++		goto del_napi;
++	p->mdio = c80_mdio_register(&pdev->dev, p->fe);
++	if (IS_ERR(p->mdio)) {
++		ret = PTR_ERR(p->mdio);
++		goto free_irq;
++	}
++	netif_carrier_off(ndev);
++	platform_set_drvdata(pdev, p);
++	ret = register_netdev(ndev);
++	if (ret)
++		goto free_irq;
++	ret = devm_device_add_group(&pdev->dev, &c80_group);
++	if (ret) {
++		unregister_netdev(ndev);
++		goto free_irq;
++	}
++	dev_info(&pdev->dev, "registered %s; IRQ/NAPI, inherited GIC ID255 via active-low sysirq, initially down\n", ndev->name);
++	return 0;
++free_irq:
++	free_irq(p->irq, p);
++del_napi:
++	netif_napi_del(&p->napi);
++free:
++	platform_set_drvdata(pdev, NULL);
++	free_netdev(ndev);
++	return ret;
++}
++
++static const struct of_device_id c80_match[] = {
++	{ .compatible = "tplink,c80-ram-pdma" }, { }
++};
++static struct platform_driver c80_driver = {
++	.probe = c80_probe,
++	.driver = { .name = "c80-ram-pdma", .of_match_table = c80_match,
++		    .suppress_bind_attrs = true },
++};
++builtin_platform_driver(c80_driver);
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Experimental C80 Linux RAM PDMA IRQ/NAPI test");
+--- /dev/null
++++ b/drivers/net/ethernet/mediatek/c80_pdma_core.h
+@@ -0,0 +1,54 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef C80_PDMA_CORE_H
++#define C80_PDMA_CORE_H
++
++#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++#error "This experimental driver requires the verified little-endian target"
++#endif
++
++#define C80_TX_COUNT 64u
++#define C80_RX_COUNT 128u
++#define C80_BUFFER_SIZE 2048u
++#define C80_DDONE (1u << 31)
++#define C80_LAST (1u << 30)
++#define C80_TX_PORT1 (1u << 25)
++#define C80_DMA_ENABLE 0x45u
++#define C80_DMA_BUSY 0x0au
++#define C80_GDMA_ROUTE_MASK 0x7777u
++
++struct c80_desc { unsigned int word[4]; };
++
++static inline unsigned int c80_tx_length(unsigned int size)
++{
++    if (!size || size > C80_BUFFER_SIZE) return 0;
++    return size < 60 ? 60 : size;
++}
++
++static inline unsigned int c80_tx_control(unsigned int size)
++{
++    return (size << 16) | C80_LAST;
++}
++
++static inline unsigned int c80_rx_length(unsigned int status)
++{
++    unsigned int size = (status >> 16) & 0x3fff;
++    if (!(status & C80_DDONE) || size < 14 || size > C80_BUFFER_SIZE) return 0;
++    return size;
++}
++
++static inline int c80_inherited_state_ok(unsigned int route, unsigned int mcr,
++                                         unsigned int pcs, unsigned int mode,
++                                         unsigned int power, unsigned int ana,
++                                         unsigned int pdma)
++{
++    return (route & 0x200) && mcr == 0x2105e30b && !(pcs & (1u << 12)) &&
++           mode == 0x31120019 && !(power & (1u << 4)) &&
++           (ana & 0x0c) == 0x04 && pdma == 0x00001410;
++}
++
++static inline unsigned int c80_next(unsigned int index, unsigned int count)
++{
++    return index + 1 == count ? 0 : index + 1;
++}
++
++#endif
+--- /dev/null
++++ b/drivers/net/ethernet/mediatek/c80_ram_mdio.c
+@@ -0,0 +1,527 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * MT7626 RAM bring-up: measured Clause22 controller and RTL8367S snapshot.
++ * The bus has no scanned devices, reset callback, GPIO, or DT children.
++ * Snapshots use the SMI transport latches and two temporary keys. An explicit,
++ * DMA-stopped CPU-link test additionally changes only the forced-link bits
++ * in 0x1311/0x1d11, then restores both original control words with readback.
++ * No VLAN, PHY, analog SerDes, DMA, clock, reset, or flash configuration.
++ * Full multi-transfer SMI sequences and key cleanup share one MDIO mutex.
++ */
++#include <linux/device.h>
++#include <linux/delay.h>
++#include <linux/err.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/phy.h>
++#include <linux/of_mdio.h>
++#include <linux/slab.h>
++#include <linux/sysfs.h>
++
++#include "c80_ram_mdio.h"
++
++#define C80_MDIO_CONFIG 0x10000
++#define C80_MDIO_COMMAND 0x10004
++#define C80_MDIO_BUSY 0x80000000U
++#define C80_MDIO_EXPECTED_CONFIG 0x45000504U
++#define C80_SMI_PHY 29
++
++struct c80_key {
++	u16 reg, before, unlocked, after;
++	bool saved, dirty, restored;
++};
++
++struct c80_switch_snapshot {
++	int result;
++	u32 stage, cleanup_errors, config_before, config_after, commands;
++	struct c80_key id_key, option_key;
++	u16 id[2], version[2], option, cpu[4], port[6];
++	u32 config_valid, ports_valid, link_mask;
++	bool option_valid, tainted;
++};
++
++struct c80_link_result {
++	struct c80_switch_snapshot baseline;
++	int result;
++	u32 stage, error_stage, cleanup_errors, commands, config_after;
++	u32 disabled_valid, restored_valid, down_polls, up_polls;
++	u16 before[2], disabled[2], restored[2], down_port, up_port;
++	bool ran, touched, down_observed, up_observed, tainted;
++};
++
++struct c80_mdio {
++	void __iomem *fe;
++	u32 commands;
++	bool tainted;
++	struct c80_link_result last_link;
++};
++
++/* Sleepable process context only. Each wait is bounded at 100 ms and
++ * leaves local interrupts enabled, allowing the independent PDMA IRQ/NAPI.
++ */
++static int c80_mdio_wait(struct c80_mdio *p, u32 *value)
++{
++	return readl_poll_timeout_atomic(p->fe + C80_MDIO_COMMAND, *value,
++				 !(*value & C80_MDIO_BUSY), 1, 100000);
++}
++
++static int c80_mdio_transfer(struct mii_bus *bus, int phy, int reg,
++			     u16 value, bool write)
++{
++	struct c80_mdio *p = bus->priv;
++	u32 command, status;
++	int ret;
++
++	if ((unsigned int)phy > 31 || (unsigned int)reg > 31)
++		return -EINVAL;
++	ret = c80_mdio_wait(p, &status);
++	if (ret)
++		return ret;
++	command = (u32)reg << 25 | (u32)phy << 20 | 1U << 16 |
++		  (write ? 1U : 2U) << 18 | (write ? value : 0);
++	/* The measured U-Boot path clears then starts this command latch. */
++	writel(command, p->fe + C80_MDIO_COMMAND);
++	writel(command | C80_MDIO_BUSY, p->fe + C80_MDIO_COMMAND);
++	p->commands++;
++	ret = c80_mdio_wait(p, &status);
++	if (ret)
++		return ret;
++	/* Conservative spacing between SMI latch writes; no clock changes. */
++	if (write)
++		udelay(20);
++	return write ? 0 : status & 0xffff;
++}
++
++static int c80_mdio_read(struct mii_bus *bus, int phy, int reg)
++{
++	return c80_mdio_transfer(bus, phy, reg, 0, false);
++}
++
++static int c80_mdio_write(struct mii_bus *bus, int phy, int reg, u16 value)
++{
++	return c80_mdio_transfer(bus, phy, reg, value, true);
++}
++
++static int c80_smi_read(struct mii_bus *bus, u16 reg, u16 *value)
++{
++	int ret;
++
++	ret = __mdiobus_write(bus, C80_SMI_PHY, 31, 0x000e);
++	if (ret)
++		return ret;
++	ret = __mdiobus_write(bus, C80_SMI_PHY, 23, reg);
++	if (ret)
++		return ret;
++	ret = __mdiobus_write(bus, C80_SMI_PHY, 21, 1);
++	if (ret)
++		return ret;
++	ret = __mdiobus_read(bus, C80_SMI_PHY, 25);
++	if (ret < 0)
++		return ret;
++	*value = ret;
++	return 0;
++}
++
++static int c80_smi_write_data(struct mii_bus *bus, u16 reg, u16 value)
++{
++	int ret;
++
++	ret = __mdiobus_write(bus, C80_SMI_PHY, 31, 0x000e);
++	if (ret)
++		return ret;
++	ret = __mdiobus_write(bus, C80_SMI_PHY, 23, reg);
++	if (ret)
++		return ret;
++	ret = __mdiobus_write(bus, C80_SMI_PHY, 24, value);
++	if (ret)
++		return ret;
++	return __mdiobus_write(bus, C80_SMI_PHY, 21, 3);
++}
++
++static int c80_smi_key_write(struct mii_bus *bus, u16 reg, u16 value)
++{
++	if ((reg != 0x13c2 && reg != 0x13c0) || (value && value != 0x249))
++		return -EPERM;
++	return c80_smi_write_data(bus, reg, value);
++}
++
++/* Exact measured control words: change only FORCE link bit4 or SDS bit9.
++ * No general-purpose switch configuration API is exposed by this test.
++ */
++static int c80_smi_link_write(struct mii_bus *bus, u16 reg, u16 value)
++{
++	if (!((reg == 0x1311 && (value == 0x1006 || value == 0x1016)) ||
++	      (reg == 0x1d11 && (value == 0x1d00 || value == 0x1f00))))
++		return -EPERM;
++	return c80_smi_write_data(bus, reg, value);
++}
++
++static int c80_key_open(struct mii_bus *bus, struct c80_key *key)
++{
++	int ret;
++
++	ret = c80_smi_read(bus, key->reg, &key->before);
++	if (ret)
++		return ret;
++	key->saved = true;
++	if (key->before && key->before != 0x249)
++		return -EPERM;
++	/* A timed-out write may have reached the ASIC: clean up on every exit. */
++	key->dirty = true;
++	ret = c80_smi_key_write(bus, key->reg, 0x249);
++	if (ret)
++		return ret;
++	ret = c80_smi_read(bus, key->reg, &key->unlocked);
++	if (ret)
++		return ret;
++	return key->unlocked == 0x249 ? 0 : -EIO;
++}
++
++static void c80_key_close(struct mii_bus *bus, struct c80_key *key,
++			  u32 *errors, unsigned int shift)
++{
++	int ret;
++
++	if (!key->dirty)
++		return;
++	if (c80_smi_key_write(bus, key->reg, key->before))
++		*errors |= 1U << shift;
++	/* Attempt readback even if the restore write was not acknowledged. */
++	ret = c80_smi_read(bus, key->reg, &key->after);
++	if (ret)
++		*errors |= 2U << shift;
++	else if (key->after != key->before)
++		*errors |= 4U << shift;
++	else {
++		key->dirty = false;
++		key->restored = true;
++	}
++}
++
++/* Caller holds mdio_lock across all protocol latches and key cleanup. */
++static void c80_switch_read_locked(struct mii_bus *bus, struct c80_switch_snapshot *s)
++{
++	static const u16 cpu_registers[] = { 0x1305, 0x1311, 0x1d11, 0x1d41 };
++	static const u16 ports[] = { 0, 1, 2, 3, 4, 6 };
++	struct c80_mdio *p = bus->priv;
++	unsigned int i;
++	int ret = 0;
++
++	s->id_key.reg = 0x13c2;
++	s->option_key.reg = 0x13c0;
++	p->commands = 0;
++	s->config_before = readl(p->fe + C80_MDIO_CONFIG);
++	if (p->tainted) {
++		ret = -EUCLEAN;
++		goto finish;
++	}
++	if (s->config_before != C80_MDIO_EXPECTED_CONFIG) {
++		ret = -EINVAL;
++		goto finish;
++	}
++	s->stage = 10;
++	ret = c80_key_open(bus, &s->id_key);
++	if (ret)
++		goto cleanup;
++	for (i = 0; i < 2; i++) {
++		s->stage = 20 + i;
++		ret = c80_smi_read(bus, 0x1300, &s->id[i]);
++		if (!ret)
++			ret = c80_smi_read(bus, 0x1301, &s->version[i]);
++		if (ret)
++			goto cleanup;
++	}
++	s->stage = 30;
++	c80_key_close(bus, &s->id_key, &s->cleanup_errors, 0);
++	if (s->cleanup_errors) {
++		ret = -EUCLEAN;
++		goto finish;
++	}
++	if (s->id[0] != 0x6367 || s->id[1] != 0x6367 ||
++	    s->version[0] != 0xa0 || s->version[1] != 0xa0) {
++		ret = -ENODEV;
++		goto finish;
++	}
++	s->stage = 40;
++	ret = c80_key_open(bus, &s->option_key);
++	if (ret)
++		goto cleanup;
++	s->stage = 50;
++	ret = c80_smi_read(bus, 0x13c1, &s->option);
++	if (ret)
++		goto cleanup;
++	s->option_valid = true;
++	s->stage = 60;
++	c80_key_close(bus, &s->option_key, &s->cleanup_errors, 3);
++	if (s->cleanup_errors) {
++		ret = -EUCLEAN;
++		goto finish;
++	}
++	for (i = 0; i < ARRAY_SIZE(cpu_registers); i++) {
++		s->stage = 70 + i;
++		ret = c80_smi_read(bus, cpu_registers[i], &s->cpu[i]);
++		if (ret)
++			goto finish;
++		s->config_valid++;
++	}
++	for (i = 0; i < ARRAY_SIZE(ports); i++) {
++		s->stage = 80 + i;
++		ret = c80_smi_read(bus, 0x1352 + ports[i], &s->port[i]);
++		if (ret)
++			goto finish;
++		s->ports_valid++;
++		if (s->port[i] & 0x10)
++			s->link_mask |= 1U << ports[i];
++	}
++	goto finish;
++cleanup:
++	/* Both restores are attempted, with at most one bounded write/read each. */
++	c80_key_close(bus, &s->option_key, &s->cleanup_errors, 3);
++	c80_key_close(bus, &s->id_key, &s->cleanup_errors, 0);
++finish:
++	s->config_after = readl(p->fe + C80_MDIO_CONFIG);
++	if (s->config_before != s->config_after)
++		s->cleanup_errors |= 0x40;
++	if (s->cleanup_errors) {
++		p->tainted = true;
++		if (!ret)
++			ret = -EUCLEAN;
++	}
++	s->result = ret;
++	s->commands = p->commands;
++	s->tainted = p->tainted;
++}
++
++static void c80_switch_read(struct mii_bus *bus, struct c80_switch_snapshot *s)
++{
++	mutex_lock(&bus->mdio_lock);
++	c80_switch_read_locked(bus, s);
++	mutex_unlock(&bus->mdio_lock);
++}
++
++bool c80_mdio_ready(struct mii_bus *bus)
++{
++	struct c80_mdio *p = bus->priv;
++	bool ready;
++
++	mutex_lock(&bus->mdio_lock);
++	ready = !p->tainted;
++	mutex_unlock(&bus->mdio_lock);
++	return ready;
++}
++
++static int c80_port6_wait(struct mii_bus *bus, bool link, u16 *status, u32 *polls)
++{
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < 20; i++) {
++		(*polls)++;
++		ret = c80_smi_read(bus, 0x1358, status);
++		if (ret)
++			return ret;
++		if (!!(*status & 0x10) == link)
++			return 0;
++		msleep(10);
++	}
++	return -ETIMEDOUT;
++}
++
++/* Called only through the Ethernet sysfs action with RTNL held, interface
++ * administratively down, no allocated DMA pools, masked IRQ and PDMA1410.
++ * Both restores are attempted even after a partial/unconfirmed link write.
++ */
++int c80_mdio_link_test(struct mii_bus *bus)
++{
++	struct c80_mdio *p = bus->priv;
++	struct c80_link_result r = { .ran = true, .stage = 5 };
++	int ret;
++
++	mutex_lock(&bus->mdio_lock);
++	p->commands = 0;
++	if (readl(p->fe + 0xa04) != 0x1410 || readl(p->fe + 0xa28)) {
++		r.baseline.config_before = readl(p->fe + C80_MDIO_CONFIG);
++		ret = -EBUSY;
++		goto finish;
++	}
++	r.stage = 10;
++	c80_switch_read_locked(bus, &r.baseline);
++	ret = r.baseline.result;
++	if (ret)
++		goto finish;
++	r.stage = 20;
++	r.before[0] = r.baseline.cpu[1];
++	r.before[1] = r.baseline.cpu[2];
++	if (r.baseline.id_key.before || r.baseline.option_key.before ||
++	    r.baseline.option != 1 || r.baseline.cpu[0] != 0xc0a0 ||
++	    r.baseline.cpu[1] != 0x1016 || r.baseline.cpu[2] != 0x1f00 ||
++	    r.baseline.cpu[3] != 0x001f || !(r.baseline.port[5] & 0x10)) {
++		ret = -EINVAL;
++		goto finish;
++	}
++	r.touched = true; /* Set before any possibly unacknowledged write. */
++	r.stage = 30;
++	ret = c80_smi_link_write(bus, 0x1d11, r.before[1] & ~0x200);
++	if (ret)
++		goto restore;
++	r.stage = 31;
++	ret = c80_smi_link_write(bus, 0x1311, r.before[0] & ~0x10);
++	if (ret)
++		goto restore;
++	r.stage = 40;
++	ret = c80_smi_read(bus, 0x1d11, &r.disabled[1]);
++	if (ret)
++		goto restore;
++	r.disabled_valid |= 2;
++	ret = c80_smi_read(bus, 0x1311, &r.disabled[0]);
++	if (ret)
++		goto restore;
++	r.disabled_valid |= 1;
++	if (r.disabled[0] != 0x1006 || r.disabled[1] != 0x1d00) {
++		ret = -EIO;
++		goto restore;
++	}
++	r.stage = 50;
++	ret = c80_port6_wait(bus, false, &r.down_port, &r.down_polls);
++	if (!ret)
++		r.down_observed = true;
++restore:
++	if (ret)
++		r.error_stage = r.stage;
++	r.stage = 60;
++	if (c80_smi_link_write(bus, 0x1d11, r.before[1]))
++		r.cleanup_errors |= 1;
++	if (c80_smi_link_write(bus, 0x1311, r.before[0]))
++		r.cleanup_errors |= 2;
++	r.stage = 70;
++	if (c80_smi_read(bus, 0x1d11, &r.restored[1]))
++		r.cleanup_errors |= 4;
++	else {
++		r.restored_valid |= 2;
++		if (r.restored[1] != r.before[1])
++			r.cleanup_errors |= 0x10;
++	}
++	if (c80_smi_read(bus, 0x1311, &r.restored[0]))
++		r.cleanup_errors |= 8;
++	else {
++		r.restored_valid |= 1;
++		if (r.restored[0] != r.before[0])
++			r.cleanup_errors |= 0x20;
++	}
++	r.stage = 80;
++	if (r.restored_valid == 3 && r.restored[0] == r.before[0] &&
++	    r.restored[1] == r.before[1]) {
++		if (c80_port6_wait(bus, true, &r.up_port, &r.up_polls))
++			r.cleanup_errors |= 0x40;
++		else
++			r.up_observed = true;
++	}
++	r.stage = 90;
++finish:
++	if (ret && !r.error_stage)
++		r.error_stage = r.stage;
++	r.config_after = readl(p->fe + C80_MDIO_CONFIG);
++	if (r.config_after != r.baseline.config_before)
++		r.cleanup_errors |= 0x80;
++	if (r.cleanup_errors)
++		p->tainted = true;
++	r.tainted = p->tainted;
++	r.result = ret ? ret : r.cleanup_errors ? -EUCLEAN : 0;
++	r.commands = p->commands;
++	p->last_link = r;
++	mutex_unlock(&bus->mdio_lock);
++	return r.result;
++}
++
++ssize_t c80_mdio_link_state(struct mii_bus *bus, char *buf)
++{
++	struct c80_mdio *p = bus->priv;
++	struct c80_link_result r;
++
++	mutex_lock(&bus->mdio_lock);
++	r = p->last_link;
++	r.tainted = p->tainted;
++	mutex_unlock(&bus->mdio_lock);
++	return sysfs_emit(buf,
++		"C80 CPU-link control test v1\n"
++		"ran=%u result=%d cleanup_errors=%08x tainted=%u stage=%u error_stage=%u commands=%u\n"
++		"before_1311_1d11=%04x %04x port6=%04x\n"
++		"disabled_1311_1d11=%04x %04x valid=%u port6=%04x observed=%u polls=%u\n"
++		"restored_1311_1d11=%04x %04x valid=%u port6=%04x observed=%u polls=%u\n"
++		"baseline_result=%d key_cleanup=%08x option=%04x touched=%u\n"
++		"baseline_cpu_1305_1311_1d11_1d41=%04x %04x %04x %04x\n"
++		"mdio_config=%08x/%08x\n",
++		r.ran, r.result, r.cleanup_errors, r.tainted, r.stage, r.error_stage, r.commands,
++		r.before[0], r.before[1], r.baseline.port[5],
++		r.disabled[0], r.disabled[1], r.disabled_valid, r.down_port, r.down_observed, r.down_polls,
++		r.restored[0], r.restored[1], r.restored_valid, r.up_port, r.up_observed, r.up_polls,
++		r.baseline.result, r.baseline.cleanup_errors, r.baseline.option, r.touched,
++		r.baseline.cpu[0], r.baseline.cpu[1], r.baseline.cpu[2], r.baseline.cpu[3],
++		r.baseline.config_before, r.config_after);
++}
++
++ssize_t c80_mdio_snapshot(struct mii_bus *bus, char *buf)
++{
++	struct c80_switch_snapshot s = {};
++
++	c80_switch_read(bus, &s);
++	/* No output or sysfs formatting until all attempted restores complete. */
++	return sysfs_emit(buf,
++		"C80 Linux MDIO snapshot v1\n"
++		"result=%d cleanup_errors=%08x tainted=%u stage=%u commands=%u\n"
++		"id=%04x/%04x version=%04x/%04x\n"
++		"key13c2=%04x/%04x/%04x saved=%u restored=%u dirty=%u\n"
++		"key13c0=%04x/%04x/%04x saved=%u restored=%u dirty=%u\n"
++		"option13c1=%04x valid=%u config_valid=%u ports_valid=%u\n"
++		"cpu_1305_1311_1d11_1d41=%04x %04x %04x %04x\n"
++		"port_status_0_1_2_3_4_6=%04x %04x %04x %04x %04x %04x link_mask=%02x\n"
++		"mdio_config=%08x/%08x\n",
++		s.result, s.cleanup_errors, s.tainted, s.stage, s.commands,
++		s.id[0], s.id[1], s.version[0], s.version[1],
++		s.id_key.before, s.id_key.unlocked, s.id_key.after,
++		s.id_key.saved, s.id_key.restored, s.id_key.dirty,
++		s.option_key.before, s.option_key.unlocked, s.option_key.after,
++		s.option_key.saved, s.option_key.restored, s.option_key.dirty,
++		s.option, s.option_valid, s.config_valid, s.ports_valid,
++		s.cpu[0], s.cpu[1], s.cpu[2], s.cpu[3],
++		s.port[0], s.port[1], s.port[2], s.port[3], s.port[4], s.port[5],
++		s.link_mask, s.config_before, s.config_after);
++}
++
++static void c80_mdio_unregister(void *data)
++{
++	struct mii_bus *bus = data;
++
++	mdiobus_unregister(bus);
++	mdiobus_free(bus);
++}
++
++struct mii_bus *c80_mdio_register(struct device *dev, void __iomem *fe)
++{
++	struct mii_bus *bus;
++	struct c80_mdio *p;
++	struct device_node *mdio_np;
++	int ret;
++
++	bus = mdiobus_alloc_size(sizeof(*p));
++	if (!bus)
++		return ERR_PTR(-ENOMEM);
++	p = bus->priv;
++	p->fe = fe;
++	bus->name = "C80 RAM MDIO, inherited configuration";
++	strscpy(bus->id, "c80-ram-mdio", MII_BUS_ID_SIZE);
++	bus->parent = dev;
++	bus->read = c80_mdio_read;
++	bus->write = c80_mdio_write;
++	/* Scanning is disabled. The explicit OF switch child is registered for DSA. */
++	bus->phy_mask = ~0U;
++	mdio_np = of_get_child_by_name(dev->of_node, "mdio");
++	ret = mdio_np ? of_mdiobus_register(bus, mdio_np) : mdiobus_register(bus);
++	of_node_put(mdio_np);
++	if (ret) {
++		mdiobus_free(bus);
++		return ERR_PTR(ret);
++	}
++	ret = devm_add_action_or_reset(dev, c80_mdio_unregister, bus);
++	return ret ? ERR_PTR(ret) : bus;
++}
+--- /dev/null
++++ b/drivers/net/ethernet/mediatek/c80_ram_mdio.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef C80_RAM_MDIO_H
++#define C80_RAM_MDIO_H
++#include <linux/types.h>
++#include <linux/compiler_types.h>
++
++struct device;
++struct mii_bus;
++
++struct mii_bus *c80_mdio_register(struct device *dev, void __iomem *fe);
++ssize_t c80_mdio_snapshot(struct mii_bus *bus, char *buf);
++bool c80_mdio_ready(struct mii_bus *bus);
++int c80_mdio_link_test(struct mii_bus *bus);
++ssize_t c80_mdio_link_state(struct mii_bus *bus, char *buf);
++#endif
+--- /dev/null
++++ b/drivers/net/dsa/realtek/c80_rtl8367s.h
+@@ -0,0 +1,124 @@
++/* SPDX-License-Identifier: GPL-2.0-only
++ * Independent RAM-only RTL8367S inherited-HSGMII operations.
++ * No analog SerDes/MCU initialization or chip reset is implemented here.
++ */
++#ifndef C80_RTL8367S_H
++#define C80_RTL8367S_H
++struct c80_rtl_io {
++	void *ctx;
++	int (*read)(void *ctx, unsigned int reg, unsigned int *value);
++	int (*write)(void *ctx, unsigned int reg, unsigned int value);
++};
++
++static int c80_rtl_protected_read(struct c80_rtl_io *io, unsigned int key,
++				unsigned int reg, unsigned int *first,
++				unsigned int *second)
++{
++	unsigned int before, check;
++	int ret, cleanup = 0;
++
++	ret = io->read(io->ctx, key, &before);
++	if (ret)
++		return ret;
++	if (before)
++		return -EINVAL;
++	/* Cleanup even if an unlock write timed out after reaching the ASIC. */
++	ret = io->write(io->ctx, key, 0x249);
++	if (!ret) {
++		ret = io->read(io->ctx, key, &check);
++		if (!ret && check != 0x249)
++			ret = -EIO;
++	}
++	if (!ret)
++		ret = io->read(io->ctx, reg, first);
++	if (!ret && second)
++		ret = io->read(io->ctx, reg + 1, second);
++	if (io->write(io->ctx, key, before))
++		cleanup = -EUCLEAN;
++	if (io->read(io->ctx, key, &check) || check != before)
++		cleanup = -EUCLEAN;
++	return cleanup ? cleanup : ret;
++}
++
++static int c80_rtl_guard(struct c80_rtl_io *io, unsigned int *id,
++			 unsigned int *version)
++{
++	unsigned int id2, ver2, option, mode, force, sds, eco;
++	int ret;
++
++	ret = c80_rtl_protected_read(io, 0x13c2, 0x1300, id, version);
++	if (ret)
++		return ret;
++	ret = c80_rtl_protected_read(io, 0x13c2, 0x1300, &id2, &ver2);
++	if (ret)
++		return ret;
++	if (*id != 0x6367 || id2 != *id || *version != 0xa0 || ver2 != *version)
++		return -ENODEV;
++	ret = c80_rtl_protected_read(io, 0x13c0, 0x13c1, &option, 0);
++	if (ret)
++		return ret;
++	if (option != 1)
++		return -EINVAL;
++	ret = io->read(io->ctx, 0x1305, &mode);
++	if (!ret)
++		ret = io->read(io->ctx, 0x1311, &force);
++	if (!ret)
++		ret = io->read(io->ctx, 0x1d11, &sds);
++	if (!ret)
++		ret = io->read(io->ctx, 0x1d41, &eco);
++	if (ret)
++		return ret;
++	/* ECO4[4:0] differs between measured boots (001f and 0000).
++	 * Keep the conservative requirement that all higher bits are zero,
++	 * including mode-selection bits5/7. Never rewrite this register. */
++	if (mode != 0xc0a0 || (eco & ~0x001fu) ||
++	    !((force == 0x1016 && sds == 0x1f00) ||
++	      (force == 0x1006 && sds == 0x1d00)))
++		return -EINVAL;
++	return 0;
++}
++
++static int c80_rtl_link(struct c80_rtl_io *io, bool up)
++{
++	unsigned int mode, old_force, old_sds, force, sds, check;
++	int ret, cleanup = 0;
++
++	ret = io->read(io->ctx, 0x1305, &mode);
++	if (!ret)
++		ret = io->read(io->ctx, 0x1311, &old_force);
++	if (!ret)
++		ret = io->read(io->ctx, 0x1d11, &old_sds);
++	if (ret)
++		return ret;
++	if (mode != 0xc0a0 ||
++	    !((old_force == 0x1016 && old_sds == 0x1f00) ||
++	      (old_force == 0x1006 && old_sds == 0x1d00)))
++		return -EINVAL;
++	force = up ? 0x1016 : 0x1006;
++	sds = up ? 0x1f00 : 0x1d00;
++	ret = io->write(io->ctx, 0x1d11, sds);
++	if (!ret)
++		ret = io->write(io->ctx, 0x1311, force);
++	if (!ret) {
++		ret = io->read(io->ctx, 0x1d11, &check);
++		if (!ret && check != sds)
++			ret = -EIO;
++	}
++	if (!ret) {
++		ret = io->read(io->ctx, 0x1311, &check);
++		if (!ret && check != force)
++			ret = -EIO;
++	}
++	if (!ret)
++		return 0;
++	if (io->write(io->ctx, 0x1d11, old_sds))
++		cleanup = -EUCLEAN;
++	if (io->write(io->ctx, 0x1311, old_force))
++		cleanup = -EUCLEAN;
++	if (io->read(io->ctx, 0x1d11, &check) || check != old_sds)
++		cleanup = -EUCLEAN;
++	if (io->read(io->ctx, 0x1311, &check) || check != old_force)
++		cleanup = -EUCLEAN;
++	return cleanup ? cleanup : ret;
++}
++#endif

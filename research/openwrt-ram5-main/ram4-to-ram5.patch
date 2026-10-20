@@ -1,0 +1,256 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -1,5 +1,5 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+-/* Narrow MT7626 MCU patch-download experiment. No 802.11/RF/flash commands.
++/* Narrow MT7626 MCU main-firmware experiment. No 802.11/RF/flash commands.
+  * Shared with the native fault model; OS supplies coherent DMA, uncached EMI,
+  * MMIO, monotonic time and barriers. Only little-endian ARM/x86 are supported.
+  */
+@@ -12,6 +12,9 @@
+ typedef unsigned char c80_u8;
+ typedef unsigned long long c80_u64;
+ #define C80_TX_N 128u
++#define C80_COMMAND_SLOTS 12u
++#define C80_FRAGMENT_SLOTS 32u
++#define C80_SYNC (C80_HIF+0xc1140)
+ #define C80_RX_N 64u
+ #define C80_RX_SIZE 1536u
+ #define C80_EMI_SIZE 0x200000u
+@@ -29,8 +32,8 @@
+ struct c80_dma_pool {
+     struct c80_desc tx[C80_TX_N], fwdl[C80_TX_N];
+     struct c80_desc rx[2][C80_RX_N];
+-    c80_u8 command[8][256];
+-    c80_u8 fragment[2][1024];
++    c80_u8 command[C80_COMMAND_SLOTS][256];
++    c80_u8 fragment[C80_FRAGMENT_SLOTS][1024];
+     c80_u8 data[2][C80_RX_N][C80_RX_SIZE];
+ };
+ struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
+@@ -53,7 +56,7 @@
+     C80_BAD_DMA=9,C80_MAIN_CRC=10,C80_RINGS_CONFIGURED=11,C80_TX_TIMEOUT=12,
+     C80_RX_TIMEOUT=13,C80_RX_BAD=14,C80_SEMAPHORE=15,C80_RESTORE=16,
+     C80_RING_PROGRAM=17,C80_DOWNLOAD_STATUS=18,C80_FWDL_TIMEOUT=19,
+-    C80_PATCH_NOT_READY=20,
++    C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -72,6 +75,10 @@
+     c80_u32 sequence,last_event_status,sem_held,release_attempted;
+     c80_u32 patch_address_valid,patch_address_status,patch_finish_valid,patch_finish_status;
+     c80_u32 patch_bytes,patch_chunks,patch_ready_valid,patch_ready_status,patch_uploaded;
++    c80_u32 main_attempted,main_region_index,main_regions_complete,main_bytes,main_chunks;
++    c80_u32 main_region_valid,main_region_status[3],main_region_bytes[3],main_region_chunks[3];
++    c80_u32 main_start_attempted,main_start_valid,main_start_status,main_ready;
++    c80_u32 main_sync_before,main_sync_after;
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -82,8 +89,8 @@
+ static const c80_u32 c80_controls[3]={0x18002150,0x18001130,0x10210000};
+ static const c80_u32 c80_control_masks[3]={0x208001,1,12};
+ static const c80_u32 c80_ring_regs[4]={0x180043f0,0x18004400,0x18004410,0x18004330};
+-static const c80_u32 c80_blob_sizes[5]={72096,169240,395008,119036,1838};
+-static const c80_u32 c80_blob_crcs[5]={0x2ede9294,0x4e2c264c,0x10efafc7,0x9d2bbb46,0xce747ab9};
++static const c80_u32 c80_blob_sizes[6]={72096,169240,395008,119036,1838,25808};
++static const c80_u32 c80_blob_crcs[6]={0x2ede9294,0x4e2c264c,0x10efafc7,0x9d2bbb46,0xce747ab9,0x92c09901};
+ static const c80_u32 c80_blob_offsets[4]={0,0x43000,0x75000,0x146800};
+ 
+ static c80_u32 c80_crc(const c80_u8 *p,c80_u32 size)
+@@ -164,12 +171,17 @@
+     }
+     return C80_RX_TIMEOUT;
+ }
++static c80_u32 c80_next_sequence(struct c80_result *r)
++{
++    r->sequence=r->sequence==15?1:r->sequence+1;
++    return r->sequence;
++}
+ static c80_u32 c80_exchange(struct c80_io *io,struct c80_result *r,c80_u32 cid,
+                             const c80_u8 *body,c80_u32 bytes,c80_u32 *reply)
+ {
+-    c80_u32 slot=r->command_submitted,sequence=++r->sequence,i,rx=0,tx=0,rc,len;
++    c80_u32 slot=r->command_submitted,sequence=c80_next_sequence(r),i,rx=0,tx=0,rc,len;
+     c80_u64 start,now; struct c80_desc *d;
+-    if(slot>=8 || bytes>192 || !sequence || sequence>15) return C80_TX_TIMEOUT;
++    if(slot>=C80_COMMAND_SLOTS || bytes>192 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+     len=c80_command(io->pool->command[slot],cid,body,bytes,sequence);
+     d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+@@ -202,9 +214,9 @@
+ static c80_u32 c80_scatter(struct c80_io *io,struct c80_result *r,
+                            const c80_u8 *body,c80_u32 bytes)
+ {
+-    c80_u32 slot=r->fwdl_submitted,sequence=++r->sequence,i,len;
++    c80_u32 slot=r->fwdl_submitted,sequence=c80_next_sequence(r),i,len;
+     c80_u64 start,now; struct c80_desc *d;
+-    if(slot>=2 || !bytes || bytes>960 || sequence>15) return C80_FWDL_TIMEOUT;
++    if(slot>=C80_FRAGMENT_SLOTS || !bytes || bytes>960 || sequence>15) return C80_FWDL_TIMEOUT;
+     len=c80_command(io->pool->fragment[slot],0xee,body,bytes,sequence);
+     d=&io->pool->fwdl[slot]; d->addr=c80_dma_address(io,io->pool->fragment[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+@@ -214,7 +226,12 @@
+     for(i=0;i<C80_MAX_POLLS;++i) {
+         if((d->ctrl&C80_DONE) && c80_read(io,0x1800433c)==r->fwdl_submitted) {
+             io->dma_order(io->context,0); ++r->fwdl_completed; ++r->tx_completed;
+-            ++r->patch_chunks; r->patch_bytes+=bytes; return 0;
++            if(r->phase>=14 && r->phase<=16) {
++                ++r->main_chunks; r->main_bytes+=bytes;
++                ++r->main_region_chunks[r->main_region_index];
++                r->main_region_bytes[r->main_region_index]+=bytes;
++            } else { ++r->patch_chunks; r->patch_bytes+=bytes; }
++            return 0;
+         }
+         now=io->time_us(io->context);
+         if(now<start || now-start>=2000000) break;
+@@ -279,6 +296,54 @@
+     }
+     return r->patch_ready_status==1?0:C80_PATCH_NOT_READY;
+ }
++/* Region metadata and byte ranges match the actual OEM402ef9e0 parser.
++ * The exact six firmware lengths/CRCs are verified before peripheral writes.
++ * Destinations below are MCU address-space values carried only in packets. */
++static c80_u32 c80_main_firmware(struct c80_io *io,struct c80_result *r,
++                                 const struct c80_blob *fw)
++{
++    static const c80_u32 destinations[3]={0x20400,0x2010000,0x40100000};
++    static const c80_u32 lengths[3]={2896,1584,21136};
++    c80_u32 i,offset=0,left,n,rc; c80_u8 body[12];
++    r->main_attempted=1; c80_stage(io,r,13);
++    /* OEM final sync hook requires state3, initial transfer state1.
++     * Refuse an inherited running image rather than issuing a restart command.
++     * State0 may settle to1; no undocumented Wi-Fi power-on writes. */
++    r->main_sync_before=c80_read(io,C80_SYNC);
++    if(r->main_sync_before==0xffffffffu || ((r->main_sync_before>>1)&7)>1)
++        return C80_BAD_SYNC;
++    if(!c80_poll(io,C80_SYNC,14,2,2000000,&r->main_sync_before)) return C80_BAD_SYNC;
++    for(i=0;i<3;++i) {
++        r->main_region_index=i; c80_stage(io,r,14+i);
++        c80_put32(body,destinations[i]); c80_put32(body+4,lengths[i]);
++        c80_put32(body+8,0x80000000);
++        rc=c80_exchange(io,r,1,body,12,&r->main_region_status[i]);
++        if(rc) return rc;
++        r->main_region_valid|=1u<<i;
++        if(r->main_region_status[i]) return C80_DOWNLOAD_STATUS;
++        left=lengths[i];
++        while(left) {
++            n=left>960?960:left;
++            if(offset>fw->bytes || n>fw->bytes-offset) return C80_BAD_FW;
++            rc=c80_scatter(io,r,fw->data+offset,n);
++            if(rc) return rc;
++            offset+=n; left-=n;
++        }
++        ++r->main_regions_complete;
++    }
++    /* The36B separator and156B trailers are metadata, never scatter payload.
++     * All feature bytes are0 in this exact image: start with flags0/address0. */
++    if(offset!=25616) return C80_BAD_FW;
++    c80_stage(io,r,17); c80_put32(body,0); c80_put32(body+4,0);
++    r->main_start_attempted=1;
++    rc=c80_exchange(io,r,2,body,8,&r->main_start_status);
++    if(rc) return rc;
++    r->main_start_valid=1;
++    if(r->main_start_status) return C80_DOWNLOAD_STATUS;
++    c80_stage(io,r,18);
++    if(!c80_poll(io,C80_SYNC,14,6,2000000,&r->main_sync_after)) return C80_MAIN_NOT_READY;
++    r->main_ready=1; return 0;
++}
+ static void c80_cleanup(struct c80_io *io,struct c80_result *r)
+ {
+     c80_u32 v,i,j;
+@@ -346,7 +411,7 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
+-    for(i=0;i<5;++i) if(!fw[i].data || fw[i].bytes!=c80_blob_sizes[i] ||
++    for(i=0;i<6;++i) if(!fw[i].data || fw[i].bytes!=c80_blob_sizes[i] ||
+        c80_crc(fw[i].data,fw[i].bytes)!=c80_blob_crcs[i]) { r->primary=C80_BAD_FW; return C80_BAD_FW; }
+     start=io->time_us(io->context); io->delay_us(io->context,10);
+     if(io->time_us(io->context)<=start) { r->primary=C80_BAD_TIMER; return C80_BAD_TIMER; }
+@@ -436,6 +501,7 @@
+     c80_write(io,C80_GLO,r->glo_before|0xc45); r->dma_started=1;
+     if((c80_read(io,C80_GLO)&0xc45)!=0xc45) { rc=C80_BAD_DMA; goto done; }
+     rc=c80_patch(io,r,&fw[4]);
++    if(!rc) rc=c80_main_firmware(io,r,&fw[5]);
+ done:
+     r->primary=rc; c80_cleanup(io,r);
+     return r->critical?r->critical:r->cleanup?C80_RESTORE:rc;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -33,10 +33,10 @@
+     int rc;
+ };
+ static struct c80_linux *c80_live;
+-static const char *const c80_filenames[5]={
++static const char *const c80_filenames[6]={
+     "c80/test_mcu.bin","c80/test_wifi.bin",
+     "c80/WIFI_RAM_CODE_iemi.bin","c80/WIFI_RAM_CODE_demi.bin",
+-    "c80/mt7626_patch_e1_hdr.bin"
++    "c80/mt7626_patch_e1_hdr.bin","c80/WIFI_RAM_CODE_7626.bin"
+ };
+ static void __iomem *c80_address(struct c80_linux *c,c80_u32 address)
+ {
+@@ -109,6 +109,11 @@
+         "command_tx=%u/%u fwdl_tx=%u/%u sequence=%u last_status=%u\n"
+         "patch_address_valid=%u status=%u finish_valid=%u status=%u\n"
+         "patch_bytes=%u chunks=%u uploaded=%u ready_valid=%u ready_status=%u sem_held=%u\n"
++        "main_attempted=%u regions=%u/3 region_index=%u bytes=%u chunks=%u\n"
++        "main_address_valid=%x status=%u/%u/%u\n"
++        "main_region_bytes=%u/%u/%u chunks=%u/%u/%u\n"
++        "main_start_attempted=%u valid=%u status=%u ready=%u\n"
++        "main_sync_before=%08x after=%08x wanted_state=3\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+         r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
+@@ -133,20 +138,25 @@
+         r->sequence,r->last_event_status,r->patch_address_valid,r->patch_address_status,
+         r->patch_finish_valid,r->patch_finish_status,r->patch_bytes,r->patch_chunks,
+         r->patch_uploaded,r->patch_ready_valid,r->patch_ready_status,r->sem_held,
+-        c->ran,!!c->result.critical);
++        r->main_attempted,r->main_regions_complete,r->main_region_index,r->main_bytes,r->main_chunks,
++        r->main_region_valid,r->main_region_status[0],r->main_region_status[1],r->main_region_status[2],
++        r->main_region_bytes[0],r->main_region_bytes[1],r->main_region_bytes[2],
++        r->main_region_chunks[0],r->main_region_chunks[1],r->main_region_chunks[2],
++        r->main_start_attempted,r->main_start_valid,r->main_start_status,r->main_ready,
++        r->main_sync_before,r->main_sync_after,c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;
+ }
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+                           const char *buf,size_t count)
+ {
+     struct c80_linux *c=c80_live;
+-    const struct firmware *fw[5]={}; struct c80_blob blobs[5];
++    const struct firmware *fw[6]={}; struct c80_blob blobs[6];
+     unsigned int i; int rc;
+     if(!c || !sysfs_streq(buf,"1")) return -EINVAL;
+     if(!mutex_trylock(&c->lock)) return -EBUSY;
+     if(c->ran) { mutex_unlock(&c->lock); return -EALREADY; }
+     c->ran=true;
+-    for(i=0;i<5;++i) {
++    for(i=0;i<6;++i) {
+         rc=request_firmware_direct(&fw[i],c80_filenames[i],c->dev);
+         if(rc) { c->rc=rc; goto done; }
+         if(fw[i]->size>UINT_MAX) { c->rc=-EFBIG; goto done; }
+@@ -169,9 +179,9 @@
+            (c->result.dma_started && !c->result.dma_idle)) c->retained=true;
+         else { dma_free_coherent(c->dev,sizeof(*c->pool),c->pool,c->dma); c->pool=NULL; }
+     }
+-    for(i=0;i<5;++i) release_firmware(fw[i]);
++    for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU patch test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU main firmware test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+@@ -222,7 +232,7 @@
+     rc=sysfs_create_group(c->kobj,&c80_group);
+     if(rc) { c80_live=NULL; kobject_put(c->kobj); return rc; }
+     platform_set_drvdata(pdev,c);
+-    dev_info(&pdev->dev,"RAM MCU patch-download test available in /sys/kernel/c80_wifi; inactive until run=1\n");
++    dev_info(&pdev->dev,"RAM MCU main-firmware test available in /sys/kernel/c80_wifi; inactive until run=1\n");
+     return 0;
+ }
+ static const struct of_device_id c80_mcu_match[]={
