@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Minimal experimental RAM-boot description, not a complete OpenWrt board DTS.
+/dts-v1/;
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+    model = "TP-Link Archer C80 v1 RU experimental RAM bring-up";
+    compatible = "tplink,archer-c80-v1", "mediatek,mt7626";
+    #address-cells = <1>;
+    #size-cells = <1>;
+    interrupt-parent = <&gic>;
+
+    aliases { serial0 = &uart0; };
+    chosen {
+        stdout-path = "serial0:115200n8";
+        linux,usable-memory-range = <0x40200000 0x01e00000>;
+        bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 loglevel=8 rdinit=/init panic=0 clk_ignore_unused";
+    };
+
+    memory@40000000 {
+        device_type = "memory";
+        reg = <0x40000000 0x02000000>;
+    };
+
+    // Preserve the factory 2MiB CONNSYS EMI window before any Wi-Fi setup.
+    reserved-memory {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+        conn_emi: memory@40000000 {
+            reg = <0x40000000 0x00200000>;
+            no-map;
+        };
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        cpu@0 {
+            device_type = "cpu";
+            compatible = "arm,cortex-a7";
+            reg = <0>;
+        };
+    };
+
+    uart_clk: uart-clock {
+        compatible = "fixed-clock";
+        #clock-cells = <0>;
+        clock-frequency = <40000000>;
+    };
+
+    timer {
+        compatible = "arm,armv7-timer";
+        interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
+                     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
+                     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
+                     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>;
+        clock-frequency = <20000000>;
+    };
+
+    soc {
+        compatible = "simple-bus";
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        restart-controller@10212000 {
+            compatible = "tplink,c80-mt7626-restart";
+            reg = <0x10212000 0x18>;
+        };
+
+        wifi-test@18000000 {
+            compatible = "tplink,c80-mcu-transport-test";
+            reg = <0x18000000 0x00100000>,
+                  <0x10000000 0x00001000>,
+                  <0x10006000 0x00001000>,
+                  <0x10212018 4>,
+                  <0x10210000 0x00001000>;
+            memory-region = <&conn_emi>;
+            status = "okay";
+        };
+
+        // Temporary read-only view of the factory-configured SPI NOR aperture.
+        // This does not describe the SPI controller or enable NOR write opcodes.
+        flash@30000000 {
+            compatible = "mtd-rom";
+            reg = <0x30000000 0x00400000>;
+            bank-width = <1>;
+        };
+
+        // Temporary diagnostic PDMA driver: retain the working U-Boot MAC/PCS.
+        gmac: ethernet@1b100000 {
+            compatible = "tplink,c80-ram-pdma";
+            reg = <0x1b100000 0x20000>, <0x1b128000 0x200>, <0x1b000000 0x1000>;
+            reg-names = "fe", "sgmii", "ethsys";
+            interrupt-parent = <&sysirq>;
+            interrupts = <GIC_SPI 223 IRQ_TYPE_LEVEL_LOW>;
+            tplink,dsa-conduit;
+            status = "okay";
+            mdio {
+                #address-cells = <1>;
+                #size-cells = <0>;
+                switch@1d {
+                    compatible = "realtek,rtl8365mb";
+                    reg = <29>;
+                    tplink,c80-ram-inherit-hsgmii;
+                    ports {
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+                        port@0 { reg = <0>; label = "wan"; phy-mode = "internal"; phy-handle = <&phy0>; };
+                        port@1 { reg = <1>; label = "lan1"; phy-mode = "internal"; phy-handle = <&phy1>; };
+                        port@2 { reg = <2>; label = "lan2"; phy-mode = "internal"; phy-handle = <&phy2>; };
+                        port@3 { reg = <3>; label = "lan3"; phy-mode = "internal"; phy-handle = <&phy3>; };
+                        port@4 { reg = <4>; label = "lan4"; phy-mode = "internal"; phy-handle = <&phy4>; };
+                        port@6 {
+                            reg = <6>;
+                            ethernet = <&gmac>;
+                            phy-mode = "2500base-x";
+                            fixed-link { speed = <2500>; full-duplex; };
+                        };
+                    };
+                    mdio {
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+                        phy0: ethernet-phy@0 { reg = <0>; };
+                        phy1: ethernet-phy@1 { reg = <1>; };
+                        phy2: ethernet-phy@2 { reg = <2>; };
+                        phy3: ethernet-phy@3 { reg = <3>; };
+                        phy4: ethernet-phy@4 { reg = <4>; };
+                    };
+                };
+            };
+        };
+
+        // Address independently identified in installed TPOS polarity code.
+        sysirq: interrupt-controller@10200a80 {
+            compatible = "mediatek,mt7626-sysirq", "mediatek,mt6577-sysirq";
+            reg = <0x10200a80 0x20>;
+            interrupt-controller;
+            #interrupt-cells = <3>;
+            #address-cells = <0>;
+            interrupt-parent = <&gic>;
+        };
+
+        gic: interrupt-controller@10310000 {
+            compatible = "arm,gic-400";
+            reg = <0x10310000 0x1000>, <0x10320000 0x1000>;
+            interrupt-controller;
+            #interrupt-cells = <3>;
+            #address-cells = <0>;
+        };
+
+        uart0: serial@11002000 {
+            compatible = "mediatek,mt6577-uart";
+            reg = <0x11002000 0x400>;
+            clocks = <&uart_clk>, <&uart_clk>;
+            clock-names = "baud", "bus";
+            // Temporary opt-in for the local driver patch: no guessed UART IRQ.
+            tplink,bringup-polling;
+            status = "okay";
+        };
+    };
+};
