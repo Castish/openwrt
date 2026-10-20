@@ -1,0 +1,33 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -879,7 +879,9 @@
+  * validated ROMNVM only. No template/SSID/client configuration API added. */
+ static c80_u32 c80_beacon_roundtrip(struct c80_io *io,struct c80_result *r)
+ {
+-    static const c80_u8 txd[32]={0x5e,0x00,0x00,0x48,0x00,0xcc,0x00,0x00,0x00,0x04,0x00,0xa0,0x01,0xf8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x08,0x00};
++    /* OEM4031a734 WDEV+86c=2 (FW beacon):pkt_ft=3,subtype8/type0.
++     * Prior zero-method context incorrectly selected HIF cut-through. */
++    static const c80_u8 txd[32]={0x5e,0x00,0x00,0x48,0x00,0xcc,0x00,0x03,0x08,0x04,0x00,0xa0,0x01,0xf8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x08,0x00};
+     static const c80_u8 frame[62]={0x80,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x64,0x00,0x01,0x00,0x00,0x09,0x43,0x38,0x30,0x2d,0x52,0x41,0x4d,0x31,0x36,0x01,0x04,0x82,0x84,0x8b,0x96,0x03,0x01,0x06,0x05,0x04,0x00,0x01,0x00,0x00};
+     c80_u8 *body=io->pool->beacon_body; c80_u32 k,i,n,rc,status=~0u,polls;
+     c80_u64 start,now;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -300,7 +300,7 @@
+     static const char *const names[]={"sync_on","beacon_on","beacon_off","sync_off"};
+     if(!c) return -ENODEV;
+     mutex_lock(&c->lock); r=&c->result;
+-    n+=sysfs_emit_at(buf,n,"complete=%u SSID=C80-RAM16 channel=6 width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=94 frame_bytes=62 TIM_pos=88 clients_supported=0\n",r->beacon_complete);
++    n+=sysfs_emit_at(buf,n,"complete=%u SSID=C80-RAM16 channel=6 width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=94 frame_bytes=62 TIM_pos=88 clients_supported=0 TXD_format=3 frame_type=0 subtype=8\n",r->beacon_complete);
+     for(i=0;i<4;++i)
+         n+=sysfs_emit_at(buf,n,"%s attempted=%u valid=%u status=%08x ext=%02x echo=%02x index=%u count=%u event=%u dma=%u tail=%u base=%u wait_us=%u polls=%u\n",
+             names[i],r->beacon_attempted[i],r->beacon_valid[i],r->beacon_status[i],r->beacon_ext[i],r->beacon_echo[i],r->beacon_index[i],r->beacon_count[i],
+@@ -366,7 +366,7 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU RX0 recycle/watch test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU beacon TXD-format test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
