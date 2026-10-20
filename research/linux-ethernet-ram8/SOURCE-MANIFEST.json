@@ -1,0 +1,170 @@
+{
+  "source_snapshot": "linux-ethernet-ram8",
+  "files": [
+    {
+      "file": "build-handoff.sh",
+      "bytes": 982,
+      "original_source_sha256": "65e38355cd7b598bbedfb11722bbaae5362d46165a2e7a1e30df646df9762c69"
+    },
+    {
+      "file": "build-kernel.sh",
+      "bytes": 2726,
+      "original_source_sha256": "3a85fa113190a34c54c1dc5355aaddf2f3e6204fbe09cb2e8485c54d7478757f"
+    },
+    {
+      "file": "c80_pdma_core.h",
+      "bytes": 1618,
+      "original_source_sha256": "cbba5240b76224abe0045776d07e641e8394a4749dd487cbbf89acfc6560ef29"
+    },
+    {
+      "file": "c80_ram_eth.c",
+      "bytes": 18649,
+      "original_source_sha256": "6569276d38a82ea1d1e2ebe1a58d55e26f5b946779f39a9fc5f6a4a2662217fc"
+    },
+    {
+      "file": "c80_ram_mdio.c",
+      "bytes": 15186,
+      "original_source_sha256": "0bde62542e8c4895169a769d4e052ede5a11693c227448df333e297af079f821"
+    },
+    {
+      "file": "c80_ram_mdio.h",
+      "bytes": 469,
+      "original_source_sha256": "63b018f7ff379fbf11699d3f74989d8539db3212b7b9d1a325348faca43abc6e"
+    },
+    {
+      "file": "c80_rtl8367s.h",
+      "bytes": 3310,
+      "original_source_sha256": "3a07dab2c93f200c01c0328c4d0f0817a06fdc6eb38e8b24a9d7785cd1d2aac5"
+    },
+    {
+      "file": "decode-flash.py",
+      "bytes": 3223,
+      "original_source_sha256": "243a6af24c6c78b61c3a6ea8591b66db9e3b78af8ca3ca9a5ed537fa3bf96611"
+    },
+    {
+      "file": "driver-test-shim.h",
+      "bytes": 17199,
+      "original_source_sha256": "aeb38de2c6854faf51c2e31c40ac601a1fc85e46835af5bd005a21e71c6e524b"
+    },
+    {
+      "file": "handoff.S",
+      "bytes": 4431,
+      "original_source_sha256": "a5780b4d24d7b9e92722112dd9f399c8d692ac97c66c6244aa9f6924a3e87685"
+    },
+    {
+      "file": "handoff.ld",
+      "bytes": 395,
+      "original_source_sha256": "8c9b8eed2b17b40fc35f38d7c4e31591ca09d6703c110ccc31a35ba1879d2f8e"
+    },
+    {
+      "file": "init.c",
+      "bytes": 4159,
+      "original_source_sha256": "a988dde94073be449602f064f3c16d2241133485aefd44215a2969c1cdd4d539"
+    },
+    {
+      "file": "linux-mt7626-bringup.patch",
+      "bytes": 52854,
+      "original_source_sha256": "f69bd65ddb6237a5facf63661e386d11d9b3b97102d31ab7f7ab20057e87834b"
+    },
+    {
+      "file": "make-source-patch.py",
+      "bytes": 2784,
+      "original_source_sha256": "168ab18955f0bc2e2165879ccf1dbbdb61bb687d7199d3f50781048b967ce130"
+    },
+    {
+      "file": "mdio-test-shim.h",
+      "bytes": 8955,
+      "original_source_sha256": "9510ecb8ab5d7f34ef4e0496fc459f4a145676a94b1948d7232791a6b994c51b"
+    },
+    {
+      "file": "minimal.config",
+      "bytes": 2660,
+      "original_source_sha256": "6a5b94958db0db224bfc705b26d3c8c35524d86319df6d9ea50c191ad82101d7"
+    },
+    {
+      "file": "mt7626-archer-c80-v1-ram.dts",
+      "bytes": 5101,
+      "original_source_sha256": "8653403052ccdf5997512fb0eb51e5353bc051a9449cb0429ab8bf01fb6a6452"
+    },
+    {
+      "file": "package.py",
+      "bytes": 5371,
+      "original_source_sha256": "56f99dd148e87045d2c0b039033d4370b98d826a29a4ab1930aa0794d32fd3c5"
+    },
+    {
+      "file": "patch-dsa.py",
+      "bytes": 4332,
+      "original_source_sha256": "671852bc8041ddcf9bfe079a7ca777e195663de21e4cd2ef3a84cb1ea039f152"
+    },
+    {
+      "file": "prepare-kernel.py",
+      "bytes": 3532,
+      "original_source_sha256": "109071e0b0ee8569ed3f41b59f62902481b1a59dda16d71ce4b9d93f2e3debe3"
+    },
+    {
+      "file": "reuse-kernel-checks.py",
+      "bytes": 2342,
+      "original_source_sha256": "133cb0cdb6d7df2263602d233c09956250e12c6a998e6e73848c880809db033b"
+    },
+    {
+      "file": "rtl8365mb-patched.c",
+      "bytes": 69429,
+      "original_source_sha256": "597f4905c8b63884af14f36854f94028deb96754e1fa65969c29096ea9c0740e"
+    },
+    {
+      "file": "test-driver.c",
+      "bytes": 20222,
+      "original_source_sha256": "908644cd915d4bc0bed5bace1cd396b6404f478546097a1ee6b5f3b31712a074"
+    },
+    {
+      "file": "test-dsa-control.c",
+      "bytes": 4801,
+      "original_source_sha256": "0809d6c7558b6c74607bb086a37828ab714fa91ed0d8b052183a7d73caa50651"
+    },
+    {
+      "file": "test-dsa-tag.c",
+      "bytes": 3910,
+      "original_source_sha256": "f23174f236ac48daea940396455b582440d6d2cb54a19bd7b76ab6155a7c1aea"
+    },
+    {
+      "file": "test-mdio.c",
+      "bytes": 15981,
+      "original_source_sha256": "b4ec7403ce6b7e3c2e202b9f36bb856b1ad545f0fbb1c2fe53d183310176afd7"
+    },
+    {
+      "file": "verify-artifacts.py",
+      "bytes": 10139,
+      "original_source_sha256": "5eed226313940e491dff7999dc8ff1207eeb259bf94a30d56fc7fc707c572ce9"
+    },
+    {
+      "file": "verify-driver.py",
+      "bytes": 4367,
+      "original_source_sha256": "b07ead4fd19fe556c99329c10b14b99d91232dd2769908aef68321246794b8cb"
+    },
+    {
+      "file": "verify-dsa.py",
+      "bytes": 2763,
+      "original_source_sha256": "c6622e38530f9ff400cddf320d7872d809bf4575dbeca0aa6d8f6ddea6807756"
+    },
+    {
+      "file": "verify-flash-reader.py",
+      "bytes": 10248,
+      "original_source_sha256": "6468a0118dd05c27fd3afb5c2662a45e1f69dff0be71b618917474e5acc19113"
+    },
+    {
+      "file": "verify-handoff.py",
+      "bytes": 6870,
+      "original_source_sha256": "d68cb649ea2205da509cd813c2914e009197e5acff865db41f09388b8930c2ba"
+    },
+    {
+      "file": "verify-mdio.py",
+      "bytes": 3539,
+      "original_source_sha256": "d6836faab26a462200f8c35a3c49547524e1e2db027584e4ebf2199312f806e5"
+    },
+    {
+      "file": "verify-userspace.py",
+      "bytes": 12707,
+      "original_source_sha256": "3d4539d56fd1380effdf65f6aa988570c2a54b914d5e15e6357249128c5d268e"
+    }
+  ]
+}
