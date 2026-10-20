@@ -1,0 +1,7 @@
+{
+  "kernel": "6.12.113-c80-openwrt-ram24-tx-free",
+  "snapshot_kind": "source archive imported on 2026-10-20; not an original historical Git commit",
+  "source_files_byte_identical_to_workspace": true,
+  "runtime_keys_images_firmware_dumps_and_raw_hardware_logs_included": false,
+  "original_private_release_manifest_sha256": "09a0ecb7b6bc63191f1ff6d2947921e42b0ce9e89198269c7ea1db5226130357"
+}

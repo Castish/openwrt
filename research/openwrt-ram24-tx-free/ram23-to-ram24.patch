@@ -1,0 +1,171 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -77,6 +77,7 @@
+     c80_u32 beacon_state_test; /* Five stored MAC snapshots + two OEM TSF queries. */
+     c80_u32 bss_period_test; /* Match BASIC timing to beacon/SYNC100TU/DTIM1. */
+     c80_u32 rx1_rearm_test,management_rx_test; /* Bounded event return and client RX counters. */
++    c80_u32 rx1_packet_test; /* Classify RX1 descriptors before MCU event parsing. */
+     c80_u32 auth_reply_test; /* At most one open-auth response; no association/data. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+@@ -94,7 +95,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+-    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,C80_RX1_NOTIFY_BAD=58,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -183,6 +184,10 @@
+     c80_u32 auth_ring_before[4],auth_ring_after[4],auth_ring_saved,auth_ring_touched,auth_ring_programmed,auth_ring_restore_bad;
+     c80_u32 auth_captured,auth_duplicate,auth_late,auth_submitted,auth_dma_done,auth_polls,auth_wait_us,auth_cpu_readback,auth_dma_index,auth_ctrl;
+     c80_u32 auth_same_peer_assoc,auth_pre_base,auth_pre_count;
++    c80_u32 rx1_type[8],rx1_non_event,rx1_unknown,rx1_last_type,rx1_last_bytes,rx1_last_dw0;
++    c80_u32 txfree_reports,txfree_valid,txfree_bad,txfree_other,txfree_tokens,txfree_ours;
++    c80_u32 txfree_foreign,txfree_before_submit,txfree_duplicate,auth_token_returned;
++    c80_u32 txfree_dw0,txfree_dw1,txfree_bytes,txfree_report_type,txfree_count,txfree_version;
+     c80_u64 auth_submit_us;
+     struct c80_management_counts management[2]; /* control38, beacon37; no packet/address saved. */
+ 
+@@ -648,10 +653,52 @@
+     if(r->rx1_readback!=index) return C80_RX1_RETURN_FAILED;
+     r->rx_next[1]=(index+1)%C80_RX_N;return 0;
+ }
++/* Actual OEM402b327c dispatches packet type6 to402b2f2c, independently
++ * of MCU events (type7). TX-free header8B, count7bits, report type6bits,
++ * version0 uses2B token entries; nonzero versions use4B with low16 token.
++ * The OEM checks embedded length=8+count*stride. Additionally bound it to
++ * the descriptor, permitting only alignment padding. No packet/address
++ * is retained and no completion here releases the pinned payload pool. */
++static c80_u32 c80_rx1_non_event(struct c80_result *r,const c80_u8 *p,c80_u32 size,c80_u32 type)
++{
++    c80_u32 dw0,dw1,count,stride,bytes,i,ours=0,foreign=0;
++    ++r->rx1_non_event;r->rx1_last_type=type;r->rx1_last_bytes=size;
++    r->rx1_last_dw0=c80_get32(p);
++    if(type!=6) { ++r->rx1_unknown;return C80_RX_TIMEOUT; }
++    ++r->txfree_reports;
++    r->txfree_dw0=dw0=c80_get32(p);r->txfree_bytes=size;
++    r->txfree_dw1=r->txfree_report_type=r->txfree_count=r->txfree_version=0;
++    if(size<8) goto bad;
++    r->txfree_dw1=dw1=c80_get32(p+4);
++    r->txfree_report_type=(dw0>>23)&63;
++    r->txfree_count=count=(dw0>>16)&127;
++    r->txfree_version=(dw1>>16)&7;
++    bytes=dw0&0xffff;
++    /* Unknown report subtypes cannot complete a token; recycle bounded
++     * DMA without pretending they are MCU replies or reading their body. */
++    if(r->txfree_report_type) { ++r->txfree_other;return C80_RX_TIMEOUT; }
++    stride=r->txfree_version?4:2;
++    if(bytes!=8+count*stride || bytes>size || size!=((bytes+3)&~3u)) goto bad;
++    /* Validate the complete list before committing any completion count. */
++    for(i=0;i<count;++i) {
++        c80_u32 token=c80_get16(p+8+i*stride);
++        if(token>4095) goto bad;
++        if(!token) ++ours;else ++foreign;
++    }
++    ++r->txfree_valid;r->txfree_tokens+=count;r->txfree_foreign+=foreign;
++    if(!r->auth_submitted) r->txfree_before_submit+=ours;
++    else if(ours) {
++        r->txfree_duplicate+=ours-(r->auth_token_returned?0:1);
++        r->txfree_ours+=ours;r->auth_token_returned=1;
++    }
++    return C80_RX_TIMEOUT;
++bad:
++    ++r->txfree_bad;return C80_RX1_NOTIFY_BAD;
++}
+ static c80_u32 c80_receive(struct c80_io *io,struct c80_result *r,
+                            c80_u32 sequence,c80_u32 event,c80_u32 *status)
+ {
+-    c80_u32 q,index,control,size,n,rc,returned,recycle;const c80_u8 *p;
++    c80_u32 q,index,control,size,n,rc,returned,recycle,non_event,type;const c80_u8 *p;
+     if(io->radio_test) { rc=c80_radio_receive(io,r);if(rc) return rc; }
+     for(q=io->radio_test?1:0;q<2;++q) {
+         recycle=q==1 && io->rx1_rearm_test;
+@@ -663,13 +710,19 @@
+             io->dma_order(io->context,0);size=(control>>16)&0x3fff;
+             ++r->rx_packets;if(!recycle) ++r->rx_next[q];
+             if(!(control&C80_LS0) || !size || size>C80_RX_SIZE ||
+-               (recycle && (size<16 || io->pool->rx[q][index].addr!=c80_dma_address(io,io->pool->data[q][index]) || io->pool->rx[q][index].addr1))) {
++               (recycle && (size<(io->rx1_packet_test?4u:16u) || io->pool->rx[q][index].addr!=c80_dma_address(io,io->pool->data[q][index]) || io->pool->rx[q][index].addr1))) {
+                 r->rx_bad_ctrl=control;return C80_RX_BAD;
+             }
+             p=io->pool->data[q][index];if(recycle) ++r->rx1_packets;
+-            rc=c80_parse_event(io,r,p,size,sequence,event,status);
++            non_event=0;
++            if(recycle && io->rx1_packet_test) {
++                type=c80_get32(p)>>29;++r->rx1_type[type];
++                if(type!=7) non_event=1;
++                else if(size<16) { r->rx_bad_ctrl=control;return C80_RX_BAD; }
++            }
++            rc=non_event?c80_rx1_non_event(r,p,size,type):c80_parse_event(io,r,p,size,sequence,event,status);
+             if(recycle && (rc==0 || rc==C80_RX_TIMEOUT)) {
+-                if(rc==C80_RX_TIMEOUT) c80_unmatched_event(r,p,size);
++                if(rc==C80_RX_TIMEOUT && !non_event) c80_unmatched_event(r,p,size);
+                 returned=c80_return_event(io,r,index,control);if(returned) return returned;
+             }
+             if(rc!=C80_RX_TIMEOUT) return rc;
+@@ -1367,6 +1420,7 @@
+     if(io->bss_period_test && (!io->beacon_state_test || !io->radio_test || !io->bss_test || !io->devinfo_test)) {
+         r->primary=C80_BSS_PERIOD_BAD_PREREQ; return r->primary;
+     }
++    if(io->rx1_packet_test && (!io->rx1_rearm_test || !io->radio_test)) { r->primary=C80_RX1_BAD_PREREQ;return r->primary; }
+     if(io->rx1_rearm_test && (!io->radio_test || !io->rx0_rearm_test)) {
+         r->primary=C80_RX1_BAD_PREREQ;return r->primary;
+     }
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -399,6 +399,21 @@
+         r->auth_ring_after[0],r->auth_ring_after[1],r->auth_ring_after[2],r->auth_ring_after[3],r->auth_same_peer_assoc);
+     mutex_unlock(&c->lock);return n;
+ }
++static ssize_t completion_show(struct kobject *k,struct kobj_attribute *a,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n=0;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock);r=&c->result;
++    n+=sysfs_emit_at(buf,n,"enabled=%u RX1_types=%u/%u/%u/%u/%u/%u/%u/%u non_event=%u unknown=%u\n",
++        c->io.rx1_packet_test,r->rx1_type[0],r->rx1_type[1],r->rx1_type[2],r->rx1_type[3],r->rx1_type[4],r->rx1_type[5],r->rx1_type[6],r->rx1_type[7],r->rx1_non_event,r->rx1_unknown);
++    n+=sysfs_emit_at(buf,n,"last_non_event_type=%u DMA_bytes=%u DW0=%08x\n",r->rx1_last_type,r->rx1_last_bytes,r->rx1_last_dw0);
++    n+=sysfs_emit_at(buf,n,"TX_free_reports=%u valid=%u bad=%u other_report=%u tokens=%u ours=%u foreign=%u before_submit=%u duplicate=%u auth_token_returned=%u\n",
++        r->txfree_reports,r->txfree_valid,r->txfree_bad,r->txfree_other,r->txfree_tokens,r->txfree_ours,r->txfree_foreign,r->txfree_before_submit,r->txfree_duplicate,r->auth_token_returned);
++    n+=sysfs_emit_at(buf,n,"last_TX_free_DMA_bytes=%u DW0=%08x DW1=%08x report_type=%u count=%u version=%u\n",
++        r->txfree_bytes,r->txfree_dw0,r->txfree_dw1,r->txfree_report_type,r->txfree_count,r->txfree_version);
++    n+=sysfs_emit_at(buf,n,"packet_or_address_saved=0 pool_release_on_report=0 RF_ACK_confirmed=0 association_supported=0\n");
++    mutex_unlock(&c->lock);return n;
++}
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+                           const char *buf,size_t count)
+ {
+@@ -440,11 +455,12 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU single auth-response test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU auth-response/RX1-completion test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+ static struct kobj_attribute reply_attr=__ATTR_RO(reply);
++static struct kobj_attribute completion_attr=__ATTR_RO(completion);
+ static struct kobj_attribute mgmt_attr=__ATTR_RO(mgmt);
+ static struct kobj_attribute events_attr=__ATTR_RO(events);
+ static struct kobj_attribute state_attr=__ATTR_RO(state);
+@@ -453,7 +469,7 @@
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&completion_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -493,7 +509,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.auth_reply_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
