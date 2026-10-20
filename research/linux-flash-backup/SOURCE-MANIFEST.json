@@ -1,0 +1,75 @@
+{
+  "source_snapshot": "linux-flash-backup",
+  "files": [
+    {
+      "file": "build-handoff.sh",
+      "bytes": 972,
+      "original_source_sha256": "54274ed95aa8b94982445031fa3259ff9d3a8786668f3c050996d2dbfa4a12e9"
+    },
+    {
+      "file": "build-kernel.sh",
+      "bytes": 2519,
+      "original_source_sha256": "0ec3bdfaa573d15ec368a917e95c533b6af2048b87bf3de53a4baf501613b890"
+    },
+    {
+      "file": "decode-flash.py",
+      "bytes": 3223,
+      "original_source_sha256": "243a6af24c6c78b61c3a6ea8591b66db9e3b78af8ca3ca9a5ed537fa3bf96611"
+    },
+    {
+      "file": "handoff.S",
+      "bytes": 4431,
+      "original_source_sha256": "4dad4eb15758a3d092dd4e717291a7ab97f911364347d8e7979e148e746a723e"
+    },
+    {
+      "file": "handoff.ld",
+      "bytes": 395,
+      "original_source_sha256": "8c9b8eed2b17b40fc35f38d7c4e31591ca09d6703c110ccc31a35ba1879d2f8e"
+    },
+    {
+      "file": "init.c",
+      "bytes": 3195,
+      "original_source_sha256": "f4f7b6750bb52faf238046e8594740404855eac051a06e999d683e30ae9308a0"
+    },
+    {
+      "file": "linux-mt7626-bringup.patch",
+      "bytes": 4116,
+      "original_source_sha256": "cbaefc8cc5091a4defed152beac1cfe1858c2375c31ddbcfddd1a4056431cd68"
+    },
+    {
+      "file": "minimal.config",
+      "bytes": 2081,
+      "original_source_sha256": "9905e0920dd5337ae9dbe4ce3c9c9e32b3b6c2d0ba62b20041ae886fed0141a9"
+    },
+    {
+      "file": "mt7626-archer-c80-v1-ram.dts",
+      "bytes": 2554,
+      "original_source_sha256": "7efa2218d9abaaf6ea2b5960bc1b627545a1906e6ebd5becf11abb721709febb"
+    },
+    {
+      "file": "prepare-kernel.py",
+      "bytes": 2212,
+      "original_source_sha256": "a3cab5c6957cf30bad620013ea93ee326daa1da741f0631cfb39ca19a2824ed4"
+    },
+    {
+      "file": "verify-artifacts.py",
+      "bytes": 6050,
+      "original_source_sha256": "ca22940fe4fed13e5b0803a9c1de2dcd5f1b45e9732075242f63cc6c50ea022d"
+    },
+    {
+      "file": "verify-flash-reader.py",
+      "bytes": 10248,
+      "original_source_sha256": "6468a0118dd05c27fd3afb5c2662a45e1f69dff0be71b618917474e5acc19113"
+    },
+    {
+      "file": "verify-handoff.py",
+      "bytes": 6865,
+      "original_source_sha256": "0d3250942b7c7e207950288b30f364569f8a6964345087eeaa173018eba27c14"
+    },
+    {
+      "file": "verify-userspace.py",
+      "bytes": 5357,
+      "original_source_sha256": "674ef0d00275b54106702fb3bab31f6751081ba949c034c294f53d98418cde5d"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Minimal experimental RAM-boot description, not a complete OpenWrt board DTS.
+/dts-v1/;
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+    model = "TP-Link Archer C80 v1 RU experimental RAM bring-up";
+    compatible = "tplink,archer-c80-v1", "mediatek,mt7626";
+    #address-cells = <1>;
+    #size-cells = <1>;
+    interrupt-parent = <&gic>;
+
+    aliases { serial0 = &uart0; };
+    chosen {
+        stdout-path = "serial0:115200n8";
+        bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 loglevel=8 rdinit=/init panic=0 clk_ignore_unused";
+    };
+
+    memory@40000000 {
+        device_type = "memory";
+        reg = <0x40000000 0x02000000>;
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        cpu@0 {
+            device_type = "cpu";
+            compatible = "arm,cortex-a7";
+            reg = <0>;
+        };
+    };
+
+    uart_clk: uart-clock {
+        compatible = "fixed-clock";
+        #clock-cells = <0>;
+        clock-frequency = <40000000>;
+    };
+
+    timer {
+        compatible = "arm,armv7-timer";
+        interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
+                     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
+                     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
+                     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>;
+        clock-frequency = <20000000>;
+    };
+
+    soc {
+        compatible = "simple-bus";
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        // Temporary read-only view of the factory-configured SPI NOR aperture.
+        // This does not describe the SPI controller or enable NOR write opcodes.
+        flash@30000000 {
+            compatible = "mtd-rom";
+            reg = <0x30000000 0x00400000>;
+            bank-width = <1>;
+        };
+
+        gic: interrupt-controller@10310000 {
+            compatible = "arm,gic-400";
+            reg = <0x10310000 0x1000>, <0x10320000 0x1000>;
+            interrupt-controller;
+            #interrupt-cells = <3>;
+            #address-cells = <0>;
+        };
+
+        uart0: serial@11002000 {
+            compatible = "mediatek,mt6577-uart";
+            reg = <0x11002000 0x400>;
+            clocks = <&uart_clk>, <&uart_clk>;
+            clock-names = "baud", "bus";
+            // Temporary opt-in for the local driver patch: no guessed UART IRQ.
+            tplink,bringup-polling;
+            status = "okay";
+        };
+    };
+};
