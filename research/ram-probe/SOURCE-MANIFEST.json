@@ -1,0 +1,25 @@
+{
+  "source_snapshot": "ram-probe",
+  "files": [
+    {
+      "file": "build.sh",
+      "bytes": 725,
+      "original_source_sha256": "90aad867a554c21d6578f0895db2988cccaf7c85604d96cdc06bd7d7909e9d10"
+    },
+    {
+      "file": "c80-ram-probe.S",
+      "bytes": 1337,
+      "original_source_sha256": "32d6df56272921568a7b7c9d255c4ab35e93d37e987f5c4534112d55a5cb9334"
+    },
+    {
+      "file": "ram-probe.ld",
+      "bytes": 411,
+      "original_source_sha256": "631e391cb1132676cd23055051eaf7059cb052f3674df10d6a466ef216a9194a"
+    },
+    {
+      "file": "verify-binary.py",
+      "bytes": 3296,
+      "original_source_sha256": "f7c3041d354d93314e33c5128d60363c712e5c321af0718d18f7238fbc7d018b"
+    }
+  ]
+}
