@@ -1,0 +1,324 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -52,7 +52,9 @@
+     c80_u8 auth_header[64] __attribute__((aligned(16)));
+     c80_u8 auth_frame[32] __attribute__((aligned(16)));
+     c80_u8 assoc_header[64] __attribute__((aligned(16)));
+-    c80_u8 assoc_frame[48] __attribute__((aligned(16))); /* one pinned30-byte reply */
++    c80_u8 assoc_frame[48] __attribute__((aligned(16))); /* one pinned36-byte reply */
++    c80_u8 diag_header[2][64] __attribute__((aligned(16)));
++    c80_u8 diag_frame[2][160] __attribute__((aligned(16))); /* ARP/ICMP, never reused */
+ 
+ };
+ struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
+@@ -80,6 +82,7 @@
+     c80_u32 bss_period_test; /* Match BASIC timing to beacon/SYNC100TU/DTIM1. */
+     c80_u32 rx1_rearm_test,management_rx_test; /* Bounded event return and client RX counters. */
+     c80_u32 rx1_packet_test; /* Classify RX1 descriptors before MCU event parsing. */
++    c80_u32 data_echo_test; /* One ARP and one ICMP response; no netdev/DHCP. */
+     c80_u32 assoc_reply_test; /* One STA/WTBL lifecycle + one association response. */
+     c80_u32 auth_reply_test; /* At most one open-auth response; no association/data. */
+     struct c80_dma_pool *pool;
+@@ -98,7 +101,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+-    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,C80_RX1_NOTIFY_BAD=58,C80_ASSOC_BAD_PREREQ=59,C80_STA_BAD_REPLY=60,C80_STA_REJECTED=61,C80_ASSOC_PUBLISH=62,C80_ASSOC_TIMEOUT=63,C80_ASSOC_BAD_DESC=64,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,C80_TSF_BAD_REPLY=46,C80_STATE_BAD_PREREQ=47,C80_BSS_PERIOD_BAD_PREREQ=48,C80_RX1_RETURN_FAILED=49,C80_RX1_BAD_PREREQ=50,C80_MGMT_BAD_PREREQ=51,C80_AUTH_BAD_PREREQ=52,C80_AUTH_RING_BASELINE=53,C80_AUTH_RING_PROGRAM=54,C80_AUTH_PUBLISH=55,C80_AUTH_TIMEOUT=56,C80_AUTH_BAD_DESC=57,C80_RX1_NOTIFY_BAD=58,C80_ASSOC_BAD_PREREQ=59,C80_STA_BAD_REPLY=60,C80_STA_REJECTED=61,C80_ASSOC_PUBLISH=62,C80_ASSOC_TIMEOUT=63,C80_ASSOC_BAD_DESC=64,C80_DATA_BAD_PREREQ=65,C80_DATA_PUBLISH=66,C80_DATA_BAD_DESC=67,C80_DATA_TIMEOUT=68,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -199,6 +202,12 @@
+     c80_u32 sta_waiting,sta_attempted[2],sta_valid[2],sta_status[2],sta_echo[2],sta_ext[2];
+     c80_u32 sta_event_bytes[2],sta_dma_bytes[2],sta_tail[2],sta_wait_us[2],sta_polls[2];
+     c80_u32 sta_meta_valid[2],sta_meta_bss[2],sta_meta_wcid[2],sta_meta_count[2],sta_meta_muar[2];
++    c80_u32 data_seen,data_raw,data_translated,data_bad_length,data_bad_status,data_wrong_peer,data_bad_format,data_bad_llc;
++    c80_u32 data_arp,data_arp_target,data_ipv4,data_icmp,data_dhcp_candidates,data_other,data_bad_protocol,data_bad_checksum,data_late;
++    c80_u32 data_last_rxd1,data_last_rxd2,data_last_fc,data_last_ethertype;
++    c80_u32 diag_captured[2],diag_duplicate[2],diag_bytes[2],diag_submitted[2],diag_dma_done[2],diag_token_returned[2];
++    c80_u32 diag_early[2],diag_dup_free[2],diag_slot[2],diag_cpu[2],diag_dma[2],diag_ctrl[2],diag_wait_us[2],diag_polls[2],diag_submissions;
++    c80_u64 diag_submit_us[2];
+     struct c80_management_counts management[2]; /* control38, beacon37; no packet/address saved. */
+ 
+ 
+@@ -420,6 +429,107 @@
+        !c80_mac_equal(p+4,io->pool->nvm_payload+8) || !c80_mac_equal(p+10,io->pool->auth_frame+4)) return;
+     if(sub==4 || sub==12) ++r->assoc_null_candidates;
+     else if(bytes>header) ++r->assoc_data_candidates;
++}
++
++/* Bounded diagnostic endpoints, not a network interface or general IP stack.
++ * Decode only the pinned open peer after STA/association success. Error/length
++ * checks precede protocol reads. Only response DMA buffers retain addresses;
++ * result/sysfs contain counters, never packet content or learned addresses. */
++static c80_u32 c80_be16(const c80_u8 *p) { return ((c80_u32)p[0]<<8)|p[1]; }
++static void c80_setbe16(c80_u8 *p,c80_u32 v) { p[0]=v>>8;p[1]=v; }
++static c80_u32 c80_sum16(const c80_u8 *p,c80_u32 n)
++{
++    c80_u32 sum=0;
++    while(n>=2) { sum+=c80_be16(p);p+=2;n-=2; }
++    if(n) sum+=(c80_u32)p[0]<<8;
++    while(sum>>16) sum=(sum&65535)+(sum>>16);
++    return (~sum)&65535;
++}
++static c80_u32 c80_ip_equal(const c80_u8 *p,c80_u32 last)
++{ return p[0]==192 && p[1]==168 && p[2]==2 && p[3]==last; }
++static void c80_data_frame(struct c80_io *io,struct c80_result *r,c80_u32 kind,
++                            const c80_u8 *payload,c80_u32 n)
++{
++    static const c80_u8 txd[32]={0x5c,0x00,0x00,0x40,0x01,0xcc,0x00,0x00,0x00,0x00,0x00,0xa0,0x00,0x38,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x20,0x00,0x00,0x04,0x00,0x00,0x00,0x00,0xc0,0x20,0x00};
++    c80_u8 *f=io->pool->diag_frame[kind],*h=io->pool->diag_header[kind];c80_u32 i,bytes;
++    for(i=0;i<160;++i) f[i]=0;
++    c80_put16(f,0x0208);c80_put16(f+2,304);c80_put16(f+22,(kind+2)<<4);
++    for(i=0;i<6;++i) { f[4+i]=io->pool->auth_frame[4+i];f[10+i]=f[16+i]=io->pool->nvm_payload[8+i]; }
++    f[24]=f[25]=0xaa;f[26]=3;f[30]=8;f[31]=kind?0:6;
++    if(!kind) {
++        c80_u8 *arp=f+32;c80_setbe16(arp,1);c80_setbe16(arp+2,0x800);arp[4]=6;arp[5]=4;c80_setbe16(arp+6,2);
++        for(i=0;i<6;++i) { arp[8+i]=f[10+i];arp[18+i]=f[4+i]; }
++        arp[14]=arp[24]=192;arp[15]=arp[25]=168;arp[16]=arp[26]=2;arp[17]=1;arp[27]=2;bytes=60;
++    } else {
++        c80_u8 *ip=f+32,*icmp=f+52;ip[0]=0x45;c80_setbe16(ip+2,20+n);c80_setbe16(ip+4,1);ip[8]=64;ip[9]=1;
++        ip[12]=ip[16]=192;ip[13]=ip[17]=168;ip[14]=ip[18]=2;ip[15]=1;ip[19]=2;
++        for(i=0;i<n;++i) icmp[i]=payload[i];
++        icmp[0]=0;icmp[2]=icmp[3]=0;c80_setbe16(icmp+2,c80_sum16(icmp,n));c80_setbe16(ip+10,c80_sum16(ip,20));bytes=52+n;
++    }
++    for(i=0;i<64;++i) h[i]=i<32?txd[i]:0;
++    c80_put16(h,32+bytes);c80_put16(h+32,0x8002+kind);c80_put32(h+40,c80_dma_address(io,f));c80_put16(h+44,0x8000|bytes);
++    r->diag_bytes[kind]=bytes;r->diag_captured[kind]=1;
++}
++static void c80_data_receive(struct c80_io *io,struct c80_result *r,const c80_u8 *v,
++                              c80_u32 total,c80_u32 offset)
++{
++    const c80_u8 *p,*da,*sa,*payload,*peer=io->pool->auth_frame+4,*own=io->pool->nvm_payload+8;
++    c80_u32 bytes,fc,sub,seq,qos=0,type,header,n; c80_u64 now;
++    if(!io->data_echo_test || r->phase!=37 || !r->assoc_submitted || !r->assoc_dma_done ||
++       !r->sta_valid[0] || r->sta_status[0] || r->sta_attempted[1]) return;
++    if(total<16 || total>C80_RX_SIZE || offset<16 || offset>total) { ++r->data_bad_length;return; }
++    bytes=total-offset;p=v+offset;
++    if(v[6]&0x80) {
++        ++r->data_translated;
++        if(!(v[3]&0x10) || offset<32 || bytes<14) { ++r->data_bad_length;return; }
++        fc=c80_get16(v+16);seq=c80_get16(v+24);qos=c80_get16(v+26);
++        if(!c80_mac_equal(v+18,peer)) { ++r->data_wrong_peer;return; }
++        da=p;sa=p+6;payload=p+14;n=bytes-14;type=c80_be16(p+12);
++    } else {
++        if(bytes<2) { ++r->data_bad_length;return; }
++        fc=c80_get16(p);sub=(fc>>4)&15;
++        if((fc&15)!=8 || (sub!=0 && sub!=8)) return;
++        ++r->data_raw;header=sub==8?26:24;
++        if(bytes<header+8) { ++r->data_bad_length;return; }
++        if(!c80_mac_equal(p+4,own)) { ++r->data_wrong_peer;return; }
++        seq=c80_get16(p+22);if(sub==8) qos=c80_get16(p+24);
++        da=p+16;sa=p+10;payload=p+header;n=bytes-header;
++        if(payload[0]!=0xaa || payload[1]!=0xaa || payload[2]!=3 || payload[3] || payload[4] || payload[5]) { ++r->data_bad_llc;return; }
++        type=c80_be16(payload+6);payload+=8;n-=8;
++    }
++    sub=(fc>>4)&15;
++    if((fc&15)!=8 || (sub!=0 && sub!=8) || (fc&0xc700)!=0x100 || (seq&15) || (sub==8 && (qos&0x80)) || (v[7]&3)) { ++r->data_bad_format;return; }
++    ++r->data_seen;r->data_last_rxd1=c80_get32(v+4);r->data_last_rxd2=c80_get32(v+8);r->data_last_fc=fc;r->data_last_ethertype=type;
++    /* OEM metadata exports FCS/ICV errors from RXD2 bits17/20. Other
++     * mt7615-family security/aggregation errors are conservatively refused;
++     * accepted packets must also be open-mode WCID1 with pinned source. */
++    if((v[10]&0x9f) || (v[11]&3) || (v[9]&0xf0)) { ++r->data_bad_status;return; }
++    if(v[8]!=1 || !c80_mac_equal(sa,peer) || (!c80_mac_equal(da,own) && !c80_mac_broadcast(da))) { ++r->data_wrong_peer;return; }
++    if(type==0x806) {
++        ++r->data_arp;
++        if(n<28 || c80_be16(payload)!=1 || c80_be16(payload+2)!=0x800 || payload[4]!=6 || payload[5]!=4 ||
++           c80_be16(payload+6)!=1 || !c80_mac_equal(payload+8,peer)) { ++r->data_bad_protocol;return; }
++        if(!c80_ip_equal(payload+14,2) || !c80_ip_equal(payload+24,1)) return;
++        ++r->data_arp_target;type=0;
++    } else if(type==0x800) {
++        ++r->data_ipv4;
++        if(n<20 || payload[0]!=0x45 || !(bytes=c80_be16(payload+2)) || bytes<20 || bytes>n ||
++           (c80_be16(payload+6)&~0x4000u) || !payload[8]) { ++r->data_bad_protocol;return; }
++        if(c80_sum16(payload,20)) { ++r->data_bad_checksum;return; }
++        if(payload[9]==17) {
++            if(bytes>=28 && c80_be16(payload+20)==68 && c80_be16(payload+22)==67 && c80_be16(payload+24)>=8 && c80_be16(payload+24)<=bytes-20) ++r->data_dhcp_candidates;
++            return;
++        }
++        if(payload[9]!=1 || !c80_mac_equal(da,own) || !c80_ip_equal(payload+12,2) || !c80_ip_equal(payload+16,1)) return;
++        ++r->data_icmp;payload+=20;n=bytes-20;
++        if(n<8 || n>72 || payload[0]!=8 || payload[1]) { ++r->data_bad_protocol;return; }
++        if(c80_sum16(payload,n)) { ++r->data_bad_checksum;return; }
++        type=1;
++    } else { ++r->data_other;return; }
++    if(r->diag_captured[type]) { ++r->diag_duplicate[type];return; }
++    now=io->time_us(io->context);
++    if(now<r->assoc_window_start_us || now-r->assoc_window_start_us>28000000) { ++r->data_late;return; }
++    c80_data_frame(io,r,type,payload,n);
+ }
+ 
+ static void c80_management_receive(struct c80_io *io,struct c80_result *r,
+@@ -506,6 +616,7 @@
+         offset=16+16*!!(group&8)+16*!!(group&1)+8*!!(group&2)+24*!!(group&4);
+         if(p[6]&0x40) offset+=2;
+         if(offset>total) { r->radio_rx_bad=3; return C80_RADIO_RX_BAD; }
++        c80_data_receive(io,r,p,total,offset);
+         if(p[6]&0x80) { ++r->radio_rx_translated; goto recycle; }
+         ++r->radio_raw_frames;
+         c80_management_receive(io,r,p+offset,total-offset);
+@@ -736,7 +847,7 @@
+  * is retained and no completion here releases the pinned payload pool. */
+ static c80_u32 c80_rx1_non_event(struct c80_result *r,const c80_u8 *p,c80_u32 size,c80_u32 type)
+ {
+-    c80_u32 dw0,dw1,count,stride,bytes,i,ours=0,peer=0,foreign=0;
++    c80_u32 dw0,dw1,count,stride,bytes,i,ours=0,peer=0,foreign=0,diag[2]={0,0};
+     ++r->rx1_non_event;r->rx1_last_type=type;r->rx1_last_bytes=size;
+     r->rx1_last_dw0=c80_get32(p);
+     if(type!=6) { ++r->rx1_unknown;return C80_RX_TIMEOUT; }
+@@ -758,8 +869,9 @@
+     for(i=0;i<count;++i) {
+         c80_u32 token=c80_get16(p+8+i*stride);
+         if(token>4095) goto bad;
+-        if(!token) ++ours;else if(token==1) ++peer;else ++foreign;
+-    }
++        if(!token) ++ours;else if(token==1) ++peer;else if(token==2 || token==3) ++diag[token-2];else ++foreign;
++    }
++    foreign+=(r->diag_submitted[0]?0:diag[0])+(r->diag_submitted[1]?0:diag[1]);
+     ++r->txfree_valid;r->txfree_tokens+=count;r->txfree_foreign+=foreign+(r->assoc_submitted?0:peer);
+     if(!r->auth_submitted) r->txfree_before_submit+=ours;
+     else if(ours) {
+@@ -771,6 +883,14 @@
+         r->assoc_free_duplicate+=peer-(r->assoc_token_returned?0:1);
+         r->txfree_duplicate+=peer-(r->assoc_token_returned?0:1);
+         r->txfree_ours+=peer;r->assoc_token_returned=1;
++    }
++    for(i=0;i<2;++i) {
++        if(!r->diag_submitted[i]) r->diag_early[i]+=diag[i];
++        else if(diag[i]) {
++            r->diag_dup_free[i]+=diag[i]-(r->diag_token_returned[i]?0:1);
++            r->txfree_duplicate+=diag[i]-(r->diag_token_returned[i]?0:1);
++            r->txfree_ours+=diag[i];r->diag_token_returned[i]=1;
++        }
+     }
+     return C80_RX_TIMEOUT;
+ bad:
+@@ -994,6 +1114,43 @@
+        d->addr!=c80_dma_address(io,io->pool->assoc_header) || d->addr1!=c80_dma_address(io,io->pool->assoc_frame) || d->info) return C80_ASSOC_BAD_DESC;
+     if((r->assoc_ctrl&C80_DONE) && r->assoc_dma_index==2) { io->dma_order(io->context,0);r->assoc_dma_done=1;return 0; }
+     if(r->assoc_wait_us>=1000000) return C80_ASSOC_TIMEOUT;
++    return 0;
++}
++
++/* Own and publish two previously unused ring cells, at most once per reply.
++ * Header DDONE/TX-free never free, clear or reuse a response buffer/token. */
++static c80_u32 c80_data_step(struct c80_io *io,struct c80_result *r)
++{
++    c80_u32 k,slot,expected; c80_u64 now;struct c80_desc *d;
++    if(!io->data_echo_test) return 0;
++    for(k=0;k<2;++k) {
++        if(!r->diag_captured[k] || (r->diag_token_returned[k] && r->diag_dma_done[k])) continue;
++        if(r->phase!=37 || !r->auth_ring_programmed || !r->sta_valid[0] || r->sta_status[0] ||
++           !r->assoc_submitted || !r->assoc_dma_done || r->sta_attempted[1]) return C80_DATA_BAD_PREREQ;
++        now=io->time_us(io->context);
++        if(now<r->assoc_window_start_us) return C80_BAD_TIMER;
++        if(!r->diag_submitted[k]) {
++            if(now-r->assoc_window_start_us>29000000) return C80_DATA_TIMEOUT;
++            if(!r->assoc_token_returned) return 0;
++            if(r->diag_submitted[1-k] && !r->diag_token_returned[1-k]) return 0;
++            slot=2+r->diag_submissions;if(slot>3) return C80_DATA_BAD_DESC;
++            d=&io->pool->auth_tx[slot];
++            if(c80_read(io,C80_AUTH_RING)!=c80_dma_address(io,io->pool->auth_tx) ||
++               c80_read(io,C80_AUTH_RING+4)!=C80_AUTH_N || c80_read(io,C80_AUTH_RING+8)!=slot ||
++               c80_read(io,C80_AUTH_RING+12)!=slot || d->ctrl!=C80_DONE || d->addr || d->addr1 || d->info) return C80_DATA_BAD_DESC;
++            d->addr=c80_dma_address(io,io->pool->diag_header[k]);d->addr1=c80_dma_address(io,io->pool->diag_frame[k]);d->info=0;d->ctrl=C80_LS0|(64u<<16);
++            io->dma_order(io->context,1);r->diag_submitted[k]=1;r->diag_slot[k]=slot;++r->diag_submissions;r->diag_submit_us[k]=now;
++            c80_write(io,C80_AUTH_RING+8,slot+1);r->diag_cpu[k]=c80_read(io,C80_AUTH_RING+8);
++            if(r->diag_cpu[k]!=slot+1) return C80_DATA_PUBLISH;
++        }
++        if(now<r->diag_submit_us[k]) return C80_BAD_TIMER;
++        r->diag_wait_us[k]=now-r->diag_submit_us[k]>0xffffffffu?0xffffffffu:(c80_u32)(now-r->diag_submit_us[k]);++r->diag_polls[k];
++        slot=r->diag_slot[k];expected=slot+1;d=&io->pool->auth_tx[slot];r->diag_ctrl[k]=d->ctrl;r->diag_dma[k]=c80_read(io,C80_AUTH_RING+12);
++        if(r->diag_dma[k]<slot || r->diag_dma[k]>expected || (d->ctrl&~C80_DONE)!=(C80_LS0|(64u<<16)) ||
++           d->addr!=c80_dma_address(io,io->pool->diag_header[k]) || d->addr1!=c80_dma_address(io,io->pool->diag_frame[k]) || d->info) return C80_DATA_BAD_DESC;
++        if((d->ctrl&C80_DONE) && r->diag_dma[k]==expected) { io->dma_order(io->context,0);r->diag_dma_done[k]=1; }
++        if(r->diag_wait_us[k]>=1000000 && (!r->diag_dma_done[k] || !r->diag_token_returned[k])) return C80_DATA_TIMEOUT;
++    }
+     return 0;
+ }
+ 
+@@ -1283,8 +1440,12 @@
+         w->last_good_us=w->elapsed_us;
+         rc=c80_receive(io,r,0,0,&status);
+         if(rc!=C80_RX_TIMEOUT) return rc?rc:C80_BEACON_BAD_REPLY;
+-        if(index==1) { rc=c80_auth_poll(io,r);if(rc) return rc;rc=c80_assoc_step(io,r);if(rc) return rc; }
++        if(index==1) { rc=c80_auth_poll(io,r);if(rc) return rc;rc=c80_assoc_step(io,r);if(rc) return rc;rc=c80_data_step(io,r);if(rc) return rc; }
+         if(w->elapsed_us>=30000000) {
++            if(index==1 && io->data_echo_test) {
++                c80_u32 k;
++                for(k=0;k<2;++k) if(r->diag_captured[k] && (!r->diag_submitted[k] || !r->diag_dma_done[k] || !r->diag_token_returned[k])) return C80_DATA_TIMEOUT;
++            }
+             if(index==1 && io->auth_reply_test && r->auth_submitted && !r->auth_dma_done) return C80_AUTH_TIMEOUT;
+             if(index==1 && io->assoc_reply_test && r->assoc_captured &&
+                (!r->assoc_submitted || !r->assoc_dma_done || !r->assoc_token_returned)) return C80_ASSOC_TIMEOUT;
+@@ -1554,6 +1715,7 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->data_echo_test && !io->assoc_reply_test) { r->primary=C80_DATA_BAD_PREREQ;return r->primary; }
+     if(io->assoc_reply_test && (!io->auth_reply_test || !io->rx1_packet_test)) { r->primary=C80_ASSOC_BAD_PREREQ;return r->primary; }
+     if(io->auth_reply_test && (!io->management_rx_test || !io->rx1_rearm_test || !io->bss_period_test || !io->beacon_state_test ||
+        !io->rx0_rearm_test || !io->watch_test || !io->beacon_test || !io->radio_test || !io->devinfo_test || !io->bss_test)) {
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -431,6 +431,19 @@
+     n+=sysfs_emit_at(buf,n,"peer_address_or_packet_logged=0 FCS_verified=0 RF_ACK_confirmed=0 data_path_or_DHCP_supported=0\n");
+     mutex_unlock(&c->lock);return n;
+ }
++static ssize_t data_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n=0;unsigned int i;
++    if(!c) return -ENODEV;
++    mutex_lock(&c->lock);r=&c->result;
++    n+=sysfs_emit_at(buf,n,"enabled=%u endpoint=192.168.2.1 client=192.168.2.2 max_ARP=1 max_ICMP=1 ICMP_payload_max=64\n",c->io.data_echo_test);
++    n+=sysfs_emit_at(buf,n,"seen=%u raw=%u translated=%u bad_length=%u bad_status=%u wrong_peer=%u bad_format=%u bad_LLC=%u\n",r->data_seen,r->data_raw,r->data_translated,r->data_bad_length,r->data_bad_status,r->data_wrong_peer,r->data_bad_format,r->data_bad_llc);
++    n+=sysfs_emit_at(buf,n,"ARP=%u target=%u IPv4=%u ICMP=%u DHCP_port_candidates=%u other=%u bad_protocol=%u bad_checksum=%u late=%u\n",r->data_arp,r->data_arp_target,r->data_ipv4,r->data_icmp,r->data_dhcp_candidates,r->data_other,r->data_bad_protocol,r->data_bad_checksum,r->data_late);
++    n+=sysfs_emit_at(buf,n,"last_RXD1=%08x RXD2=%08x FC=%04x ethertype=%04x submitted_total=%u\n",r->data_last_rxd1,r->data_last_rxd2,r->data_last_fc,r->data_last_ethertype,r->diag_submissions);
++    for(i=0;i<2;++i) n+=sysfs_emit_at(buf,n,"%s captured=%u duplicate=%u bytes=%u submitted=%u header_done=%u token_returned=%u slot=%u CPU=%u DMA=%u ctrl=%08x wait_us=%u polls=%u token_early=%u duplicate_free=%u\n",i?"ICMP":"ARP",r->diag_captured[i],r->diag_duplicate[i],r->diag_bytes[i],r->diag_submitted[i],r->diag_dma_done[i],r->diag_token_returned[i],r->diag_slot[i],r->diag_cpu[i],r->diag_dma[i],r->diag_ctrl[i],r->diag_wait_us[i],r->diag_polls[i],r->diag_early[i],r->diag_dup_free[i]);
++    n+=sysfs_emit_at(buf,n,"HW_FCS_error_checked=1 independent_FCS=0 RF_ACK_confirmed=0 WLAN_netdev_DHCP_general_IP_stack=0 pool_pinned_until_reboot=1 packet_or_address_logged=0\n");
++    mutex_unlock(&c->lock);return n;
++}
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+                           const char *buf,size_t count)
+ {
+@@ -463,7 +476,7 @@
+          * After ANY management submission keep the complete pool unchanged
+          * until system reset, even when MCU/WPDMA stop checks passed.
+          * Critical/failed DMA stop also pins every allocation as before. */
+-        if(c->result.auth_submitted || c->result.assoc_submitted || c->result.critical ||
++        if(c->result.auth_submitted || c->result.assoc_submitted || c->result.diag_submissions || c->result.critical ||
+            (c->result.dma_started && !c->result.dma_idle)) c->retained=true;
+         else {
+             memzero_explicit(c->pool,sizeof(*c->pool));
+@@ -472,11 +485,12 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU single association-response test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU bounded ARP/ICMP test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+ static struct kobj_attribute reply_attr=__ATTR_RO(reply);
++static struct kobj_attribute data_attr=__ATTR_RO(data);
+ static struct kobj_attribute association_attr=__ATTR_RO(association);
+ static struct kobj_attribute completion_attr=__ATTR_RO(completion);
+ static struct kobj_attribute mgmt_attr=__ATTR_RO(mgmt);
+@@ -487,7 +501,7 @@
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+@@ -527,7 +541,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
