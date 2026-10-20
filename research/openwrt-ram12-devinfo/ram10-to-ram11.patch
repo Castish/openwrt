@@ -1,0 +1,68 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -112,6 +112,7 @@
+     c80_u32 nvm_mismatch_valid,nvm_mismatch_offset;
+     c80_u32 nvm_set_wait_us,nvm_set_polls,nvm_get_wait_us,nvm_get_polls;
+     c80_u32 nvm_wait_clock_backwards;
++    c80_u32 nvm_get_padding,nvm_compared;
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -271,20 +272,32 @@
+                 /* OEM4030eb8c:source/format/offset/count6B then content.
+                  * Matched-sequence OEM dispatch accepts both command echo
+                  *9b and documented buffer-read result8a. Bound everything
+-                 * independently, then compare every requested byte. */
++                 * independently, then compare every requested byte. OEM's
++                 * callback copies count bytes at body+6 and ignores trailing
++                 * alignment. RAM10 measured1044=ALIGN4(12+6+1024). */
+                 if(p[24]!=0x8a && p[24]!=0x9b) { ++r->rx_ignored; continue; }
+                 r->nvm_get_ext=p[24];
+-                if(size<34+C80_NVM_BYTES || r->last_event_len!=18+C80_NVM_BYTES)
+-                    return C80_NVM_BAD_REPLY;
++                if(size<34 || r->last_event_len<18) return C80_NVM_BAD_REPLY;
+                 r->nvm_get_source=p[28]; r->nvm_get_format=p[29];
+                 r->nvm_get_offset=c80_get16(p+30); r->nvm_get_count=c80_get16(p+32);
++                /* Earlier generic event bounds require the complete declared
++                 * event to fit the DMA frame, including any two pad bytes.
++                 * Accept exactly the packed length or its4-byte alignment;
++                 * no arbitrary extra bytes, shortened content or new offset. */
++                if(r->last_event_len!=18+C80_NVM_BYTES &&
++                   r->last_event_len!=((18+C80_NVM_BYTES+3)&~3u))
++                    return C80_NVM_BAD_REPLY;
+                 if(r->nvm_get_source!=1 || r->nvm_get_format!=1 ||
+                    r->nvm_get_offset || r->nvm_get_count!=C80_NVM_BYTES)
+                     return C80_NVM_BAD_REPLY;
++                r->nvm_get_padding=r->last_event_len-(18+C80_NVM_BYTES);
+                 r->nvm_get_valid=1; r->nvm_get_crc=c80_crc(p+34,C80_NVM_BYTES);
+-                for(n=0;n<C80_NVM_BYTES;++n) if(p[34+n]!=io->pool->nvm_payload[4+n]) {
+-                    r->nvm_mismatch_valid=1; r->nvm_mismatch_offset=n;
+-                    return C80_NVM_MISMATCH;
++                for(n=0;n<C80_NVM_BYTES;++n) {
++                    r->nvm_compared=n+1;
++                    if(p[34+n]!=io->pool->nvm_payload[4+n]) {
++                        r->nvm_mismatch_valid=1; r->nvm_mismatch_offset=n;
++                        return C80_NVM_MISMATCH;
++                    }
+                 }
+                 r->nvm_equal=1; *status=0; return 0;
+             }
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -198,7 +198,7 @@
+         "wifi_irq=%d raw_gic=243 spi=211 attempted=%u armed=%u entries=%u events=%u unexpected=%u faults=%08x cpu_started=%u cpu_stopped=%u\n"
+         "irq_mask_before=%08x enabled=%08x after=%08x source_before=%08x cleared=%08x seen=%08x after=%08x ack_writes=%u\n"
+         "nvm_source attempted=%u valid=%u linux_errno=%d radio_crc=%08x raw_crc=%08x upload_crc=%08x bytes=1024 copied=960\n"
+-        "nvm_set attempted=%u valid=%u status=%u get_attempted=%u valid=%u ext=%02x source=%u format=%u offset=%u count=%u crc=%08x equal=%u mismatch=%u/%u\n"
++        "nvm_set attempted=%u valid=%u status=%u get_attempted=%u valid=%u ext=%02x source=%u format=%u offset=%u count=%u crc=%08x equal=%u mismatch=%u/%u padding=%u compared=%u\n"
+         "nvm_wait set_limit_ms=60000 get_limit_ms=60000 set_us=%u set_polls=%u get_us=%u get_polls=%u clock_backwards=%u\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+@@ -244,6 +244,7 @@
+         r->nvm_set_attempted,r->nvm_set_valid,r->nvm_set_status,r->nvm_get_attempted,r->nvm_get_valid,r->nvm_get_ext,
+         r->nvm_get_source,r->nvm_get_format,r->nvm_get_offset,r->nvm_get_count,r->nvm_get_crc,r->nvm_equal,
+         r->nvm_mismatch_valid,r->nvm_mismatch_offset,
++        r->nvm_get_padding,r->nvm_compared,
+         r->nvm_set_wait_us,r->nvm_set_polls,r->nvm_get_wait_us,r->nvm_get_polls,r->nvm_wait_clock_backwards,
+         c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;

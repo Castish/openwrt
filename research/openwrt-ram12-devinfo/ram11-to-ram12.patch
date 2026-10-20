@@ -1,0 +1,203 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -12,7 +12,7 @@
+ typedef unsigned char c80_u8;
+ typedef unsigned long long c80_u64;
+ #define C80_TX_N 128u
+-#define C80_COMMAND_SLOTS 12u
++#define C80_COMMAND_SLOTS 14u
+ #define C80_COMMAND_BYTES 1152u
+ #define C80_NVM_BYTES 1024u
+ #define C80_NVM_COPY_BYTES 960u
+@@ -35,6 +35,7 @@
+ #define C80_MAX_POLLS 40000u
+ #define C80_NVM_WAIT_US 60000000u /* OEM40312678/40312814: attrs.wait_ms=60000. */
+ #define C80_NVM_POLL_US 1000u
++#define C80_DEVINFO_WAIT_US 6000000u /* OEM40261b80/8c: default6000ms. */
+ 
+ struct c80_desc { volatile c80_u32 addr, ctrl, addr1, info; };
+ struct c80_dma_pool {
+@@ -60,6 +61,7 @@
+     c80_u32 (*irq_arm)(void *,struct c80_result *);
+     c80_u32 (*irq_disarm)(void *,struct c80_result *);
+     c80_u32 (*nvm_read)(void *,c80_u8 *,c80_u32,c80_u32 *);
++    c80_u32 devinfo_test; /* Linux enables the bounded ON/OFF experiment. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -72,6 +74,7 @@
+     C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,C80_MODE_REFUSED=23,
+     C80_QUERY_BAD=24,C80_IRQ_NOT_SEEN=25,C80_IRQ_BAD=26,
+     C80_NVM_BAD_SOURCE=27,C80_NVM_SET_REJECTED=28,C80_NVM_BAD_REPLY=29,C80_NVM_MISMATCH=30,
++    C80_DEVINFO_BAD_MAC=31,C80_DEVINFO_REJECTED=32,C80_DEVINFO_BAD_REPLY=33,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -113,6 +116,9 @@
+     c80_u32 nvm_set_wait_us,nvm_set_polls,nvm_get_wait_us,nvm_get_polls;
+     c80_u32 nvm_wait_clock_backwards;
+     c80_u32 nvm_get_padding,nvm_compared;
++    c80_u32 devinfo_mac_valid,devinfo_attempted[2],devinfo_valid[2];
++    c80_u32 devinfo_status[2],devinfo_ext[2],devinfo_ownmac[2],devinfo_count[2];
++    c80_u32 devinfo_complete,devinfo_wait_us[2],devinfo_polls[2];
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -258,6 +264,23 @@
+             ++r->rx_ignored; continue;
+         }
+         if(event==0xed) {
++            if(r->phase==23 || r->phase==24) {
++                c80_u32 step=r->phase-23;
++                /* Actual OEM402edd44/402ecc4c: 16B response body, status
++                 * LE32 at +4. Its sequence-matched dispatcher permits both
++                 * the generic and command-specific outer extension. Check
++                 * the exact size, command echo and successful TLV metadata. */
++                if(p[24]!=0 && p[24]!=0x2a) { ++r->rx_ignored; continue; }
++                r->devinfo_ext[step]=p[24];
++                if(size<44 || r->last_event_len!=28 || p[28]!=0x2a)
++                    return C80_DEVINFO_BAD_REPLY;
++                r->devinfo_status[step]=c80_get32(p+32);
++                r->devinfo_ownmac[step]=p[36]; r->devinfo_count[step]=c80_get16(p+38);
++                if(!r->devinfo_status[step] &&
++                   (r->devinfo_ownmac[step] || r->devinfo_count[step]!=1))
++                    return C80_DEVINFO_BAD_REPLY;
++                r->devinfo_valid[step]=1; *status=r->devinfo_status[step]; return 0;
++            }
+             if(r->phase==21) {
+                 /* Generic extended-command result:12B header +8B body.
+                  * OEM SET's callback is a NOP; additionally check echo21
+@@ -355,6 +378,9 @@
+     } else if(r->phase==22) {
+         r->nvm_get_wait_us=elapsed; r->nvm_get_polls=polls;
+         if(now<start) r->nvm_wait_clock_backwards|=2;
++    } else if(r->phase==23 || r->phase==24) {
++        r->devinfo_wait_us[r->phase-23]=elapsed;
++        r->devinfo_polls[r->phase-23]=polls;
+     }
+ }
+ static c80_u32 c80_exchange(struct c80_io *io,struct c80_result *r,c80_u32 cid,
+@@ -362,13 +388,14 @@
+ {
+     c80_u32 slot=r->command_submitted,sequence=c80_next_sequence(r),i,rx=0,tx=0,rc,len;
+     c80_u32 nvm=cid==0xed && (r->phase==21 || r->phase==22);
+-    c80_u32 timeout=nvm?C80_NVM_WAIT_US:2000000u;
+-    c80_u32 poll_us=nvm?C80_NVM_POLL_US:50u;
+-    c80_u32 max_polls=nvm?C80_NVM_WAIT_US/C80_NVM_POLL_US:C80_MAX_POLLS;
++    c80_u32 devinfo=cid==0xed && (r->phase==23 || r->phase==24);
++    c80_u32 timeout=nvm?C80_NVM_WAIT_US:devinfo?C80_DEVINFO_WAIT_US:2000000u;
++    c80_u32 poll_us=(nvm || devinfo)?C80_NVM_POLL_US:50u;
++    c80_u32 max_polls=(nvm || devinfo)?timeout/poll_us:C80_MAX_POLLS;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_COMMAND_SLOTS || bytes>C80_COMMAND_BYTES-64 || !sequence || sequence>15) return C80_TX_TIMEOUT;
+     if(cid==0xed) {
+-        if(!r->main_ready || r->phase<20 || r->phase>22) return C80_QUERY_BAD;
++        if(!r->main_ready || r->phase<20 || r->phase>24) return C80_QUERY_BAD;
+         if(c80_read(io,C80_GLO)==0xffffffffu || (c80_read(io,C80_GLO)&C80_DOWNLOAD_MODE))
+             return C80_MODE_REFUSED;
+     } else if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+@@ -377,6 +404,9 @@
+         io->pool->command[slot][38]=1; io->pool->command[slot][41]=0x21;
+     }
+     if(cid==0xed && r->phase==22) io->pool->command[slot][41]=0x9b;
++    /* OEM flags0x27 encode query0 here, despite the mutating command name.
++     * Preserve the ARM-produced header; don't infer SetQuery from its name. */
++    if(cid==0xed && (r->phase==23 || r->phase==24)) io->pool->command[slot][41]=0x2a;
+     d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+     io->dma_order(io->context,1);
+@@ -384,10 +414,10 @@
+     c80_write(io,0x180043f8,r->command_submitted);
+     start=io->time_us(io->context);
+     for(i=0;i<max_polls;++i) {
+-        /* NVM follows the actual OEM60s response limit. A second iteration
++        /* NVM follows OEM60s, DEVINFO the OEM6s default. A second iteration
+          * cap also bounds a frozen clock; rollback fails without unsigned
+          * wrap. No command is retried or resent while waiting. */
+-        if(nvm) {
++        if(nvm || devinfo) {
+             now=io->time_us(io->context);
+             if(now<start || now-start>=timeout) break;
+         }
+@@ -611,6 +641,31 @@
+     if(rc) return rc;
+     return r->nvm_get_valid && r->nvm_equal?0:C80_NVM_BAD_REPLY;
+ }
++static c80_u32 c80_devinfo_mac(struct c80_io *io,struct c80_result *r)
++{
++    const c80_u8 *mac=io->pool->nvm_payload+8; c80_u32 i,any=0,all=255;
++    if(!r->nvm_valid) return C80_DEVINFO_BAD_MAC;
++    for(i=0;i<6;++i) { any|=mac[i]; all&=mac[i]; }
++    if(!any || all==255 || (mac[0]&1)) return C80_DEVINFO_BAD_MAC;
++    r->devinfo_mac_valid=1; return 0;
++}
++static c80_u32 c80_devinfo_roundtrip(struct c80_io *io,struct c80_result *r)
++{
++    c80_u8 body[20]={0}; c80_u32 i,step,rc,status=~0u;
++    if(!r->nvm_equal || !r->devinfo_mac_valid) return C80_DEVINFO_BAD_MAC;
++    /* OEM TPOS header byte1 is reserved/zero; band0 is in the active TLV.
++     * One device context, OwnMac0, band0; no BSS, MAC TX/RX or RF commands. */
++    c80_put16(body+2,1); body[4]=1;
++    c80_put16(body+8,0); c80_put16(body+10,12);
++    for(i=0;i<6;++i) body[14+i]=io->pool->nvm_payload[8+i];
++    for(step=0;step<2;++step) {
++        body[12]=step==0; c80_stage(io,r,23+step); r->devinfo_attempted[step]=1;
++        rc=c80_exchange(io,r,0xed,body,sizeof(body),&status);
++        if(rc) return rc;
++        if(!r->devinfo_valid[step] || status) return C80_DEVINFO_REJECTED;
++    }
++    r->devinfo_complete=1; return 0;
++}
+ static void c80_cleanup(struct c80_io *io,struct c80_result *r)
+ {
+     c80_u32 v,i,j;
+@@ -716,6 +771,10 @@
+         rc=c80_nvm_snapshot(io,r);
+         if(rc) { r->primary=rc; return rc; }
+     }
++    if(io->devinfo_test) {
++        rc=c80_devinfo_mac(io,r);
++        if(rc) { r->primary=rc; return rc; }
++    }
+     for(i=0;i<3;++i) r->controls_before[i]=c80_read(io,c80_controls[i]);
+     c80_stage(io,r,3);
+     for(i=0;i<2;++i) {
+@@ -800,6 +859,7 @@
+     if(!rc) rc=c80_main_firmware(io,r,&fw[5]);
+     if(!rc) rc=c80_runtime_query(io,r);
+     if(!rc && r->nvm_valid) rc=c80_nvm_roundtrip(io,r);
++    if(!rc && io->devinfo_test) rc=c80_devinfo_roundtrip(io,r);
+ done:
+     r->primary=rc; c80_cleanup(io,r);
+     return r->critical?r->critical:r->cleanup?C80_RESTORE:rc;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -200,6 +200,8 @@
+         "nvm_source attempted=%u valid=%u linux_errno=%d radio_crc=%08x raw_crc=%08x upload_crc=%08x bytes=1024 copied=960\n"
+         "nvm_set attempted=%u valid=%u status=%u get_attempted=%u valid=%u ext=%02x source=%u format=%u offset=%u count=%u crc=%08x equal=%u mismatch=%u/%u padding=%u compared=%u\n"
+         "nvm_wait set_limit_ms=60000 get_limit_ms=60000 set_us=%u set_polls=%u get_us=%u get_polls=%u clock_backwards=%u\n"
++        "devinfo mac_valid=%u complete=%u on_attempted=%u valid=%u status=%08x ext=%02x own=%u count=%u wait_us=%u polls=%u\n"
++        "devinfo_off attempted=%u valid=%u status=%08x ext=%02x own=%u count=%u wait_us=%u polls=%u\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+         r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
+@@ -246,6 +248,10 @@
+         r->nvm_mismatch_valid,r->nvm_mismatch_offset,
+         r->nvm_get_padding,r->nvm_compared,
+         r->nvm_set_wait_us,r->nvm_set_polls,r->nvm_get_wait_us,r->nvm_get_polls,r->nvm_wait_clock_backwards,
++        r->devinfo_mac_valid,r->devinfo_complete,r->devinfo_attempted[0],r->devinfo_valid[0],
++        r->devinfo_status[0],r->devinfo_ext[0],r->devinfo_ownmac[0],r->devinfo_count[0],r->devinfo_wait_us[0],r->devinfo_polls[0],
++        r->devinfo_attempted[1],r->devinfo_valid[1],r->devinfo_status[1],r->devinfo_ext[1],
++        r->devinfo_ownmac[1],r->devinfo_count[1],r->devinfo_wait_us[1],r->devinfo_polls[1],
+         c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;
+ }
+@@ -333,7 +339,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
