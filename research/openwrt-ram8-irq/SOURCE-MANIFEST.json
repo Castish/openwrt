@@ -1,0 +1,230 @@
+{
+  "source_snapshot": "openwrt-ram8-irq",
+  "files": [
+    {
+      "file": "FIRMWARE-SOURCES.json",
+      "bytes": 1440,
+      "original_source_sha256": "04161cb0941cb77ffdafd8a8fa6a76a96138e064fd23b362a4a91a98f19b846a"
+    },
+    {
+      "file": "LICENSES.md",
+      "bytes": 2678,
+      "original_source_sha256": "4e92f3b7a40af4777a1d194e468258a51f605467df6f3eebf9a8b24664ba5376"
+    },
+    {
+      "file": "RUNNER-LICENSE",
+      "bytes": 1082,
+      "original_source_sha256": "5ea99049fe36140d37cd53389b7d8d1eb6781d96fd2486f2906d50aa29758776"
+    },
+    {
+      "file": "build-kernel.sh",
+      "bytes": 1841,
+      "original_source_sha256": "7209a0e24e86e7fd13dddfd7070ad01f1695b270d631326fa79e2241fb3e1cee"
+    },
+    {
+      "file": "build-qemu-check.sh",
+      "bytes": 1602,
+      "original_source_sha256": "82cc77b5bfe0b1be9809ff5e020989e2f2d0e618c0ddd10b66ad06af24b9cb1a"
+    },
+    {
+      "file": "c80_mcu_core.h",
+      "bytes": 32819,
+      "original_source_sha256": "455b97cb06045b82e2ffdc9223f77f6d3edaf19aa189b8e973ac87ae1ed520b4"
+    },
+    {
+      "file": "c80_mcu_transport.c",
+      "bytes": 16420,
+      "original_source_sha256": "19a18cdd1e7cde8ca7a3d4599ac94f9ec1cf2b1ff8fdff25ffebb1989c29a4cf"
+    },
+    {
+      "file": "c80_pdma_core.h",
+      "bytes": 1618,
+      "original_source_sha256": "cbba5240b76224abe0045776d07e641e8394a4749dd487cbbf89acfc6560ef29"
+    },
+    {
+      "file": "c80_ram_eth.c",
+      "bytes": 18649,
+      "original_source_sha256": "6569276d38a82ea1d1e2ebe1a58d55e26f5b946779f39a9fc5f6a4a2662217fc"
+    },
+    {
+      "file": "c80_ram_mdio.c",
+      "bytes": 15186,
+      "original_source_sha256": "0bde62542e8c4895169a769d4e052ede5a11693c227448df333e297af079f821"
+    },
+    {
+      "file": "c80_ram_mdio.h",
+      "bytes": 469,
+      "original_source_sha256": "63b018f7ff379fbf11699d3f74989d8539db3212b7b9d1a325348faca43abc6e"
+    },
+    {
+      "file": "c80_restart.c",
+      "bytes": 1851,
+      "original_source_sha256": "21a922c744078b63b09efe2537747101eeb84c269a74b602013732cec3f2301e"
+    },
+    {
+      "file": "c80_rtl8367s.h",
+      "bytes": 3516,
+      "original_source_sha256": "88da0ebac24f7ed37b3eb477f09a9ea14588d8b6fcc4cda446d475514146690f"
+    },
+    {
+      "file": "evidence/trace-stock-dma-mode.py",
+      "bytes": 5013,
+      "original_source_sha256": "de285f21eebdff10673be6edcdcb49819b5b8fa1665011b49ba4d17154a7d9ac"
+    },
+    {
+      "file": "evidence/trace-stock-download.py",
+      "bytes": 10035,
+      "original_source_sha256": "f7fe155c56b0335d9c6b363c40761811e3d95c7221d8c5a39e05589e9366835b"
+    },
+    {
+      "file": "evidence/trace-stock-irq.py",
+      "bytes": 5732,
+      "original_source_sha256": "d2cb20547ba06e0ea40681ad5ea743b88d6e8deebdd5ffa54455516cf007189e"
+    },
+    {
+      "file": "evidence/trace-stock-main.py",
+      "bytes": 8779,
+      "original_source_sha256": "7f761d0bf9ed4febb17f01bb61bb57e7c5df88ca20245c4a4c3b80b2bfe61797"
+    },
+    {
+      "file": "evidence/trace-stock-query.py",
+      "bytes": 5557,
+      "original_source_sha256": "679e0cc8552dae8d64ba55b29afb6047f0d8cf0da4db2e240c8413744058ff8b"
+    },
+    {
+      "file": "finalize-artifacts.py",
+      "bytes": 12169,
+      "original_source_sha256": "bce93204aec4049afb8c6d27fb979f9f1642787a077aa00c6e71a365c8d26179"
+    },
+    {
+      "file": "handoff.S",
+      "bytes": 4431,
+      "original_source_sha256": "a5780b4d24d7b9e92722112dd9f399c8d692ac97c66c6244aa9f6924a3e87685"
+    },
+    {
+      "file": "irq-wrapper-generated.c",
+      "bytes": 6097,
+      "original_source_sha256": "d210d32bea35c5e0dd5c70816b593b43b99e7fca6193d0208a949a92f8aa5085"
+    },
+    {
+      "file": "linux-mt7626-bringup.patch",
+      "bytes": 107871,
+      "original_source_sha256": "4b1046bd58a983951d6d7ba51c8cc5335a80307d25df0d26767a28c5653abb9c"
+    },
+    {
+      "file": "make-initramfs-list.py",
+      "bytes": 1074,
+      "original_source_sha256": "e49d30a3e2ca6d1d3f7006f837da98598ac418bbab7fb4536eda37f7167c475e"
+    },
+    {
+      "file": "make-script.py",
+      "bytes": 2542,
+      "original_source_sha256": "22f774729e2c1f74977844d9684b9c50efc1342dfec2d209309399f415611fc6"
+    },
+    {
+      "file": "make-source-patch.py",
+      "bytes": 3070,
+      "original_source_sha256": "0422a1e69db34e6276b9af172def56186b455dbc217733c463f5a288e58f2653"
+    },
+    {
+      "file": "minimal.config",
+      "bytes": 3095,
+      "original_source_sha256": "b6f3a5da5813e7b5f591c884bbf05eb12dbb9fa31a680a26f6bc897114916428"
+    },
+    {
+      "file": "mt7626-archer-c80-v1-emi.dts",
+      "bytes": 6068,
+      "original_source_sha256": "4e300b3d8b025882c9db5bcb19374915043d53adec4bdbc02fa45a5067fd7354"
+    },
+    {
+      "file": "openwrt-packages.json",
+      "bytes": 10818,
+      "original_source_sha256": "406c7ebe386635fc117bca6615108ea8c5d8fa1fcc2d45e24fa1e062bfbd390b"
+    },
+    {
+      "file": "package.py",
+      "bytes": 4949,
+      "original_source_sha256": "0d5c1eb61c309d20076b91f9ac44bc3996e944d3c3a700e39921d040caa9dbb7"
+    },
+    {
+      "file": "packages.lock",
+      "bytes": 1084,
+      "original_source_sha256": "1caad883533a9458ea8f1e240b547718d80e3364b287d19b8e6c09fc1b6e212c"
+    },
+    {
+      "file": "prepare-kernel.py",
+      "bytes": 1785,
+      "original_source_sha256": "02cf2f4e83a54e45b3deda85efc869753a96fddedbf03d42da7419d4c950cbfa"
+    },
+    {
+      "file": "qemu-emi.dts",
+      "bytes": 9819,
+      "original_source_sha256": "785d4e8fea09fea5982006d6fd5e824d6699690da6aff99ff023569548d45a06"
+    },
+    {
+      "file": "ram7-to-ram8.patch",
+      "bytes": 12586,
+      "original_source_sha256": "c97a9f98b990299b0e6bf3dcfd49bb8e51c7b405088314038d756f2844c91af9"
+    },
+    {
+      "file": "run-qemu-emi-check.sh",
+      "bytes": 793,
+      "original_source_sha256": "8e01207a313ab03fcb92e48f7f30d104bcfb86d2fc1a53e5f71f61f1da3bea9a"
+    },
+    {
+      "file": "verify-artifacts.py",
+      "bytes": 13779,
+      "original_source_sha256": "f45d9dae88be41b2eaa3cf913f73bced6128579f37168fd8630f6b091506cc81"
+    },
+    {
+      "file": "verify-core.c",
+      "bytes": 35035,
+      "original_source_sha256": "01a9882d1a4d8a84e36233f901ea2b34b83a0c915ecc84ca1f160652c48b9a52"
+    },
+    {
+      "file": "verify-core.sh",
+      "bytes": 1769,
+      "original_source_sha256": "f843fc0e8b12b7846d76caf44e1ea7b94f38bb58ba23b4c18a894dc0ffd6813e"
+    },
+    {
+      "file": "verify-decompressor.py",
+      "bytes": 3673,
+      "original_source_sha256": "efea58a37fde16e81ed19b55a97c2344c23605f835d198bc7cf36b42312395df"
+    },
+    {
+      "file": "verify-handoff.py",
+      "bytes": 6825,
+      "original_source_sha256": "d69d09ba2302b0575b5e1b275294b498eca1a1cb1047b68189e9af925b0ead22"
+    },
+    {
+      "file": "verify-irq-wrapper.py",
+      "bytes": 5667,
+      "original_source_sha256": "5ef0bda7e66d1113a921c95bd87b50921781ae7a3c193dd2f441ecaec5f30b65"
+    },
+    {
+      "file": "verify-parent-scope.py",
+      "bytes": 2705,
+      "original_source_sha256": "ceacbd57b0d961d236e9d192dfb75909a2a81d001cdf0e5d3e719a1444643bd2"
+    },
+    {
+      "file": "verify-qemu-emi.py",
+      "bytes": 10729,
+      "original_source_sha256": "c8f75a113036073b7f8cd0b69e96cb27a7b4897bdacdf929827aaa570a25bd62"
+    },
+    {
+      "file": "verify-restart.py",
+      "bytes": 5139,
+      "original_source_sha256": "e8789a997ee5897fd12b2284bcd5ae68988a2fdf9063cf97bc985b4866b70dfd"
+    },
+    {
+      "file": "verify-rootfs-abi.py",
+      "bytes": 2995,
+      "original_source_sha256": "598493ce487fa0370c3617d84451ee12be95251aced56cdf83c32c0b1e30d0a9"
+    },
+    {
+      "file": "verify-rootfs-scope.py",
+      "bytes": 1792,
+      "original_source_sha256": "0571fb8726d03cf6b0b6f5fb7259aa7bdde3e96358ef49d06a394a01c53c3630"
+    }
+  ]
+}

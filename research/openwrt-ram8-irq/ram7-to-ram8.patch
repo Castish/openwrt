@@ -1,0 +1,267 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -24,6 +24,7 @@
+ #define C80_DOWNLOAD_MODE 0x200u /* Actual OEM40308dd0, WPDMA download mode. */
+ #define C80_MASK (C80_HIF+0x4204)
+ #define C80_SOURCE (C80_HIF+0x4200)
++#define C80_IRQ_RX1 2u /* OEM403087cc RX1 source; only this bit is unmasked. */
+ #define C80_RESET 0x10212018u
+ #define C80_DONE 0x80000000u
+ #define C80_LS0 0x40000000u
+@@ -38,6 +39,7 @@
+     c80_u8 data[2][C80_RX_N][C80_RX_SIZE];
+ };
+ struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
++struct c80_result;
+ struct c80_io {
+     void *context;
+     c80_u32 (*read)(void *,c80_u32);
+@@ -48,6 +50,8 @@
+     void (*copy_emi)(void *,c80_u32,const c80_u8 *,c80_u32);
+     c80_u32 (*crc_emi)(void *,c80_u32,c80_u32);
+     void (*stage)(void *,c80_u32);
++    c80_u32 (*irq_arm)(void *,struct c80_result *);
++    c80_u32 (*irq_disarm)(void *,struct c80_result *);
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -58,7 +62,7 @@
+     C80_RX_TIMEOUT=13,C80_RX_BAD=14,C80_SEMAPHORE=15,C80_RESTORE=16,
+     C80_RING_PROGRAM=17,C80_DOWNLOAD_STATUS=18,C80_FWDL_TIMEOUT=19,
+     C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,C80_MODE_REFUSED=23,
+-    C80_QUERY_BAD=24,
++    C80_QUERY_BAD=24,C80_IRQ_NOT_SEEN=25,C80_IRQ_BAD=26,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -88,6 +92,10 @@
+     c80_u32 runtime_glo_before,runtime_glo_after,last_event_ext;
+     c80_u32 counter_query_attempted,counter_query_valid,counter_category,counter_count,counter_value;
+     c80_u32 mask_main_ready,mask_runtime,mask_cleanup_entry,mask_first_zero,mask_after_stop,mask_before_final_zero,mask_zero_writes;
++    c80_u32 irq_attempted,irq_armed,irq_entries,irq_events,irq_unexpected,irq_faults;
++    c80_u32 irq_mask_before,irq_mask_enable,irq_mask_after;
++    c80_u32 irq_source_before,irq_source_cleared,irq_source_seen,irq_source_after;
++    c80_u32 irq_ack_writes,irq_cpu_started,irq_cpu_stopped;
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -114,6 +122,58 @@
+ { io->write(io->context,reg,value); }
+ static void c80_stage(struct c80_io *io,struct c80_result *r,c80_u32 phase)
+ { r->phase=phase; if(io->stage) io->stage(io->context,phase); }
++/* The OS serializes these helpers with a raw IRQ-safe lock. The hard IRQ
++ * has no waits, allocation, descriptor access or pool lifetime dependency.
++ * The CPU IRQ is one-shot too, including on an unexpected/invalid source.
++ * Failure bits:1 mask readback,2 invalid source,4 stale RX1,8 unexpected,
++ *16 premature/repeated entry. No other W1C source bits are acknowledged. */
++static c80_u32 c80_irq_prepare(struct c80_io *io,struct c80_result *r)
++{
++    r->irq_attempted=1; r->irq_mask_before=c80_read(io,C80_MASK);
++    if(r->irq_mask_before==0xffffffffu) { r->irq_faults|=1; return C80_IRQ_BAD; }
++    c80_write(io,C80_MASK,0); r->irq_mask_after=c80_read(io,C80_MASK);
++    if(r->irq_mask_after) { r->irq_faults|=1; return C80_IRQ_BAD; }
++    r->irq_source_before=c80_read(io,C80_SOURCE);
++    if(r->irq_source_before==0xffffffffu) { r->irq_faults|=2; return C80_IRQ_BAD; }
++    if(r->irq_source_before&C80_IRQ_RX1) {
++        c80_write(io,C80_SOURCE,C80_IRQ_RX1); ++r->irq_ack_writes;
++    }
++    r->irq_source_cleared=c80_read(io,C80_SOURCE);
++    if(r->irq_source_cleared==0xffffffffu) { r->irq_faults|=2; return C80_IRQ_BAD; }
++    if(r->irq_source_cleared&C80_IRQ_RX1) { r->irq_faults|=4; return C80_IRQ_BAD; }
++    r->irq_armed=1; return 0;
++}
++static c80_u32 c80_irq_unmask(struct c80_io *io,struct c80_result *r)
++{
++    if(!r->irq_armed || r->irq_entries) { r->irq_faults|=16; return C80_IRQ_BAD; }
++    c80_write(io,C80_MASK,C80_IRQ_RX1);
++    r->irq_mask_enable=c80_read(io,C80_MASK);
++    if(r->irq_mask_enable!=C80_IRQ_RX1) { r->irq_faults|=1; return C80_IRQ_BAD; }
++    return 0;
++}
++static void c80_irq_event(struct c80_io *io,struct c80_result *r)
++{
++    c80_u32 was_armed=r->irq_armed;
++    ++r->irq_entries; r->irq_armed=0;
++    r->irq_source_seen=c80_read(io,C80_SOURCE);
++    c80_write(io,C80_MASK,0); r->irq_mask_after=c80_read(io,C80_MASK);
++    if(r->irq_mask_after) r->irq_faults|=1;
++    if(!was_armed || r->irq_entries!=1) r->irq_faults|=16;
++    if(r->irq_source_seen==0xffffffffu) { r->irq_faults|=2; return; }
++    if(was_armed && (r->irq_source_seen&C80_IRQ_RX1)) {
++        ++r->irq_events;
++        c80_write(io,C80_SOURCE,C80_IRQ_RX1); ++r->irq_ack_writes;
++        r->irq_source_after=c80_read(io,C80_SOURCE);
++        if(r->irq_source_after==0xffffffffu) r->irq_faults|=2;
++    } else { ++r->irq_unexpected; r->irq_faults|=8; }
++}
++static c80_u32 c80_irq_stop(struct c80_io *io,struct c80_result *r)
++{
++    r->irq_armed=0;
++    c80_write(io,C80_MASK,0); r->irq_mask_after=c80_read(io,C80_MASK);
++    if(r->irq_mask_after) r->irq_faults|=1;
++    return r->irq_faults?C80_IRQ_BAD:r->irq_events?0:C80_IRQ_NOT_SEEN;
++}
+ static int c80_poll(struct c80_io *io,c80_u32 reg,c80_u32 mask,c80_u32 value,
+                     c80_u32 timeout,c80_u32 *last)
+ {
+@@ -403,7 +463,7 @@
+ }
+ static c80_u32 c80_runtime_query(struct c80_io *io,struct c80_result *r)
+ {
+-    c80_u8 body[104]; c80_u32 i,rc,status=0;
++    c80_u8 body[104]; c80_u32 i,rc,irq_rc=0,status=0;
+     c80_stage(io,r,19); r->mask_main_ready=c80_read(io,C80_MASK);
+     r->runtime_glo_before=c80_read(io,C80_GLO);
+     if(r->runtime_glo_before==0xffffffffu) return C80_MODE_REFUSED;
+@@ -416,9 +476,18 @@
+     r->mask_runtime=c80_read(io,C80_MASK); c80_stage(io,r,20);
+     for(i=0;i<sizeof(body);++i) body[i]=0;
+     c80_put16(body,5); body[4]=0; body[5]=1; c80_put32(body+8,1);
++    /* Linux always supplies both callbacks. Native legacy transport fault
++     * cases may omit both to isolate the already-proven polling contract. */
++    if(!!io->irq_arm!=!!io->irq_disarm) return C80_IRQ_BAD;
++    if(io->irq_arm) {
++        rc=io->irq_arm(io->context,r);
++        if(rc) { io->irq_disarm(io->context,r); return rc; }
++    }
+     r->counter_query_attempted=1;
+     rc=c80_exchange(io,r,0xed,body,sizeof(body),&status);
++    if(io->irq_disarm) irq_rc=io->irq_disarm(io->context,r);
+     if(rc) return rc;
++    if(irq_rc) return irq_rc;
+     return r->counter_query_valid?0:C80_QUERY_BAD;
+ }
+ static void c80_cleanup(struct c80_io *io,struct c80_result *r)
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -16,6 +16,9 @@
+ #include <linux/sysfs.h>
+ #include <linux/delay.h>
+ #include <linux/ktime.h>
++#include <linux/interrupt.h>
++#include <linux/irq.h>
++#include <linux/spinlock.h>
+ #include "c80_mcu_core.h"
+ 
+ struct c80_window { resource_size_t base,bytes; void __iomem *va; };
+@@ -31,6 +34,9 @@
+     struct c80_dma_pool *pool;
+     bool ran,finished,retained;
+     int rc;
++    int irq;
++    raw_spinlock_t irq_lock;
++    bool irq_cpu_on;
+ };
+ static struct c80_linux *c80_live;
+ static const char *const c80_filenames[6]={
+@@ -84,6 +90,48 @@
+ {
+     struct c80_linux *c=context;
+     dev_info(c->dev,"MCU transport stage%u\n",stage);
++}
++static irqreturn_t c80_mcu_irq(int irq,void *context)
++{
++    struct c80_linux *c=context; unsigned long flags;
++    raw_spin_lock_irqsave(&c->irq_lock,flags);
++    /* Bound a mistaken route too: never return into an enabled level storm.
++     * The IRQ domain owns polarity/GIC state; no direct GIC register writes. */
++    if(c->irq_cpu_on) { c->irq_cpu_on=false; disable_irq_nosync(irq); }
++    c80_irq_event(&c->io,&c->result);
++    raw_spin_unlock_irqrestore(&c->irq_lock,flags);
++    return IRQ_HANDLED;
++}
++static c80_u32 c80_linux_irq_arm(void *context,struct c80_result *r)
++{
++    struct c80_linux *c=context; unsigned long flags; c80_u32 rc;
++    if(r->phase!=20 || !r->main_ready || !r->dma_started) return C80_IRQ_BAD;
++    raw_spin_lock_irqsave(&c->irq_lock,flags);
++    rc=c80_irq_prepare(&c->io,r);
++    if(!rc) { c->irq_cpu_on=true; r->irq_cpu_started=1; }
++    raw_spin_unlock_irqrestore(&c->irq_lock,flags);
++    if(rc) return rc;
++    enable_irq(c->irq);
++    raw_spin_lock_irqsave(&c->irq_lock,flags);
++    rc=c80_irq_unmask(&c->io,r);
++    raw_spin_unlock_irqrestore(&c->irq_lock,flags);
++    return rc;
++}
++static c80_u32 c80_linux_irq_disarm(void *context,struct c80_result *r)
++{
++    struct c80_linux *c=context; unsigned long flags; unsigned int i;
++    if(!r->irq_attempted) return 0;
++    /* A valid DMA reply alone is insufficient. Give a delayed CPU IRQ a
++     * bounded opportunity, without extending failed transport timeouts. */
++    for(i=0;r->counter_query_valid && !READ_ONCE(r->irq_entries) && i<100;++i)
++        usleep_range(1000,1200);
++    raw_spin_lock_irqsave(&c->irq_lock,flags);
++    c80_irq_stop(&c->io,r);
++    if(c->irq_cpu_on) { c->irq_cpu_on=false; disable_irq_nosync(c->irq); }
++    raw_spin_unlock_irqrestore(&c->irq_lock,flags);
++    synchronize_irq(c->irq);
++    if(r->irq_cpu_started) r->irq_cpu_stopped=1;
++    return r->irq_faults?C80_IRQ_BAD:r->irq_events?0:C80_IRQ_NOT_SEEN;
+ }
+ static ssize_t status_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
+ {
+@@ -121,6 +169,8 @@
+         "runtime_glo_before=%08x after=%08x event_ext=%02x\n"
+         "counter_query_attempted=%u valid=%u category=%u count=%u value=%08x\n"
+         "mask_at_ready=%08x runtime=%08x cleanup_entry=%08x first_zero=%08x after_stop=%08x before_final=%08x zero_writes=%u\n"
++        "wifi_irq=%d raw_gic=243 spi=211 attempted=%u armed=%u entries=%u events=%u unexpected=%u faults=%08x cpu_started=%u cpu_stopped=%u\n"
++        "irq_mask_before=%08x enabled=%08x after=%08x source_before=%08x cleared=%08x seen=%08x after=%08x ack_writes=%u\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+         r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
+@@ -159,6 +209,8 @@
+         r->runtime_glo_before,r->runtime_glo_after,r->last_event_ext,
+         r->counter_query_attempted,r->counter_query_valid,r->counter_category,r->counter_count,r->counter_value,
+         r->mask_main_ready,r->mask_runtime,r->mask_cleanup_entry,r->mask_first_zero,r->mask_after_stop,r->mask_before_final_zero,r->mask_zero_writes,
++        c->irq,r->irq_attempted,r->irq_armed,r->irq_entries,r->irq_events,r->irq_unexpected,r->irq_faults,r->irq_cpu_started,r->irq_cpu_stopped,
++        r->irq_mask_before,r->irq_mask_enable,r->irq_mask_after,r->irq_source_before,r->irq_source_cleared,r->irq_source_seen,r->irq_source_after,r->irq_ack_writes,
+         c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;
+ }
+@@ -197,7 +249,7 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU runtime query test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU IRQ route test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+@@ -226,7 +278,7 @@
+             return dev_err_probe(&pdev->dev,-EINVAL,"EMI has a cacheable linear RAM alias\n");
+     c=devm_kzalloc(&pdev->dev,sizeof(*c),GFP_KERNEL);
+     if(!c) return -ENOMEM;
+-    c->dev=&pdev->dev; mutex_init(&c->lock);
++    c->dev=&pdev->dev; mutex_init(&c->lock); raw_spin_lock_init(&c->irq_lock);
+     for(i=0;i<ARRAY_SIZE(c->windows);++i) {
+         res=platform_get_resource(pdev,IORESOURCE_MEM,i);
+         if(!res || res->start!=expected_base[i] ||
+@@ -241,7 +293,13 @@
+     if(rc) return rc;
+     c->io=(struct c80_io){.context=c,.read=c80_linux_read,.write=c80_linux_write,
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+-        .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage};
++        .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
++        .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm};
++    c->irq=platform_get_irq(pdev,0);
++    if(c->irq<0) return c->irq;
++    rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
++                        "c80-mcu-rx1",c);
++    if(rc) return dev_err_probe(&pdev->dev,rc,"Cannot reserve Wi-Fi IRQ\n");
+     c->kobj=kobject_create_and_add("c80_wifi",kernel_kobj);
+     if(!c->kobj) return -ENOMEM;
+     c80_live=c;
+--- a/mt7626-archer-c80-v1-emi.dts
++++ b/mt7626-archer-c80-v1-emi.dts
+@@ -77,6 +77,8 @@
+                   <0x10212018 4>,
+                   <0x10210000 0x00001000>;
+             memory-region = <&conn_emi>;
++            interrupt-parent = <&sysirq>;
++            interrupts = <GIC_SPI 211 IRQ_TYPE_LEVEL_LOW>;
+             status = "okay";
+         };
+ 
