@@ -1,0 +1,145 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -67,6 +67,7 @@
+     c80_u32 radio_test; /* One channel, bounded MAC ON/listen/OFF lifecycle. */
+     c80_u32 beacon_test; /* Bounded30s firmware beacon offload inside radio. */
+     c80_u32 watch_test; /* Compare idle radio vs beacon window; read-only HIF watch. */
++    c80_u32 rx0_rearm_test; /* Return completed RX0 buffers; bounded64-frame poll budget. */
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
+@@ -83,7 +84,7 @@
+     C80_BSS_BAD_STATE=34,C80_BSS_REJECTED=35,C80_BSS_BAD_REPLY=36,
+     C80_RADIO_BAD_STATE=37,C80_RADIO_REJECTED=38,C80_RADIO_BAD_REPLY=39,
+     C80_RADIO_RX_BAD=40,
+-    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,
++    C80_BEACON_BAD_STATE=41,C80_BEACON_REJECTED=42,C80_BEACON_BAD_REPLY=43,C80_HIF_CHANGED=44,C80_RX0_RETURN_FAILED=45,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ /* Non-atomic observations of already-used, readable HIF registers. No
+@@ -155,6 +156,7 @@
+     c80_u32 beacon_window_started,beacon_window_us,beacon_window_polls;
+     struct c80_watch_window watch[2]; /* 0 no beacon; 1 beacon enabled. */
+     c80_u32 watch_fault_phase;
++    c80_u32 rx0_rearmed,rx0_publishes,rx0_last_cpu,rx0_readback,rx0_budget_yields;
+ 
+ 
+ };
+@@ -274,12 +276,17 @@
+ }
+ /* Exact OEM4031b680/type and4031b68c..b728/group/padding rules. RX0
+  * frames never enter the MCU event decoder when this experiment is enabled.
+- * Read only completed single-buffer descriptors, never recycle a slot. */
++ * Read only completed single-buffer descriptors. Recycle only after parsing
++ * when explicitly enabled; otherwise preserve the legacy bounded trace. */
+ static c80_u32 c80_radio_receive(struct c80_io *io,struct c80_result *r)
+ {
+-    c80_u32 index,ctrl,size,total,type,group,offset; const c80_u8 *p;
+-    while(r->rx_next[0]<C80_RX_N-1) {
+-        index=r->rx_next[0]; ctrl=io->pool->rx[0][index].ctrl;
++    c80_u32 index,ctrl,size,total,type,group,offset,budget=0; const c80_u8 *p;
++    while(io->rx0_rearm_test || r->rx_next[0]<C80_RX_N-1) {
++        /* Do not monopolize the MCU-event/clock/stop path under continuous RX. */
++        if(budget==C80_RX_N) { ++r->rx0_budget_yields; break; }
++        index=r->rx_next[0];
++        if(index>=C80_RX_N) { r->radio_rx_bad=4; return C80_RADIO_RX_BAD; }
++        ctrl=io->pool->rx[0][index].ctrl;
+         if(!(ctrl&C80_DONE)) break;
+         io->dma_order(io->context,0); size=(ctrl>>16)&0x3fff;
+         if(!(ctrl&C80_LS0) || size<16 || size>C80_RX_SIZE ||
+@@ -287,25 +294,42 @@
+            io->pool->rx[0][index].addr1) { r->radio_rx_bad=1; return C80_RADIO_RX_BAD; }
+         p=io->pool->data[0][index]; total=c80_get16(p); type=p[3]>>5;
+         if(total<16 || total>size) { r->radio_rx_bad=2; return C80_RADIO_RX_BAD; }
+-        ++r->rx_next[0]; ++r->rx_packets; ++r->radio_rx_packets;
++        ++r->rx_next[0]; ++r->rx_packets; ++r->radio_rx_packets; ++budget;
+         r->radio_rx_bytes+=total; ++r->radio_rx_types[type];
+         if(!r->radio_first_valid) {
+             r->radio_first_valid=1; r->radio_first_dw0=c80_get32(p);
+             r->radio_first_dw1=c80_get32(p+4);
+         }
+-        if(type!=2) continue;
++        if(type!=2) goto recycle;
+         group=(p[3]>>1)&15;
+         offset=16+16*!!(group&8)+16*!!(group&1)+8*!!(group&2)+24*!!(group&4);
+         if(p[6]&0x40) offset+=2;
+         if(offset>total) { r->radio_rx_bad=3; return C80_RADIO_RX_BAD; }
+-        if(p[6]&0x80) { ++r->radio_rx_translated; continue; }
++        if(p[6]&0x80) { ++r->radio_rx_translated; goto recycle; }
+         ++r->radio_raw_frames;
+         /* Count only complete raw management-beacon header candidates.
+          * No addresses/SSID/payload are saved or printed. FCS not verified. */
+         if(total-offset>=36 && (c80_get16(p+offset)&0xfc)==0x80 &&
+            !(c80_get16(p+offset)&3)) ++r->radio_beacon_headers;
+-    }
+-    if(r->rx_next[0]==C80_RX_N-1) r->radio_rx_full=1;
++recycle:
++        if(io->rx0_rearm_test) {
++            /* OEM402f3f6c..402f402c resets capacity,clears DONE,preserves LS0,
++             * advances modulo size and records the consumed slot as CPU idx.
++             * Caller402b2620..2644 publishes it at the ring's4408 register.
++             * We keep no packet pointer,so reuse this coherent buffer instead
++             * of allocating a replacement OS packet. No DMA enable writes. */
++            io->pool->rx[0][index].addr1=0; io->pool->rx[0][index].info=0;
++            io->pool->rx[0][index].ctrl=(ctrl&C80_LS0)|(C80_RX_SIZE<<16);
++            ++r->rx0_rearmed;
++            io->dma_order(io->context,1);
++            r->rx0_last_cpu=index;
++            c80_write(io,0x18004408,index); ++r->rx0_publishes;
++            r->rx0_readback=c80_read(io,0x18004408);
++            if(r->rx0_readback!=index) return C80_RX0_RETURN_FAILED;
++            r->rx_next[0]=(index+1)%C80_RX_N;
++        }
++    }
++    if(!io->rx0_rearm_test && r->rx_next[0]==C80_RX_N-1) r->radio_rx_full=1;
+     return 0;
+ }
+ static const c80_u8 c80_radio_ext[5]={0x46,8,0x4e,0x46,0x46};
+@@ -314,7 +338,7 @@
+                            c80_u32 sequence,c80_u32 event,c80_u32 *status)
+ {
+     c80_u32 q,index,control,size,n; const c80_u8 *p;
+-    /* No rearming: a bounded patch trial uses at most63 packets per ring. */
++    /* MCU event RX1 remains bounded63/non-recycled. Radio RX0 may recycle. */
+     if(io->radio_test) {
+         c80_u32 rc=c80_radio_receive(io,r);
+         if(rc) return rc;
+@@ -1089,6 +1113,9 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(io->rx0_rearm_test && !io->radio_test) {
++        r->primary=C80_RADIO_BAD_STATE; return C80_RADIO_BAD_STATE;
++    }
+     if(io->watch_test && !io->beacon_test) {
+         r->primary=C80_BEACON_BAD_STATE; return C80_BEACON_BAD_STATE;
+     }
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -290,6 +290,8 @@
+         r->radio_raw_frames,r->radio_beacon_headers,r->radio_rx_translated);
+     n+=sysfs_emit_at(buf,n,"first_valid=%u first_dw0=%08x first_dw1=%08x payload_logged=0\n",
+         r->radio_first_valid,r->radio_first_dw0,r->radio_first_dw1);
++    n+=sysfs_emit_at(buf,n,"rx0_rearm_enabled=%u rearmed=%u publishes=%u cursor=%u last_cpu=%u readback=%u budget_yields=%u\n",
++        c->io.rx0_rearm_test,r->rx0_rearmed,r->rx0_publishes,r->rx_next[0],r->rx0_last_cpu,r->rx0_readback,r->rx0_budget_yields);
+     mutex_unlock(&c->lock); return n;
+ }
+ static ssize_t beacon_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
+@@ -364,7 +366,7 @@
+     }
+     for(i=0;i<6;++i) release_firmware(fw[i]);
+     c->finished=true;
+-    dev_info(c->dev,"MCU HIF watch test result=%d critical=%u; fresh boot required\n",
++    dev_info(c->dev,"MCU RX0 recycle/watch test result=%d critical=%u; fresh boot required\n",
+              c->rc,c->result.critical);
+     mutex_unlock(&c->lock); return count;
+ }
+@@ -413,7 +415,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.watch_test=1,.rx0_rearm_test=1};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
