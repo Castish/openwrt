@@ -1,0 +1,65 @@
+{
+  "source_snapshot": "connsys-hif-probe",
+  "files": [
+    {
+      "file": "FIRMWARE-SOURCES.json",
+      "bytes": 1137,
+      "original_source_sha256": "14ef7748b6001206d367aa95e56f564a423f584f4ded69b7e4a0c828b14f229f"
+    },
+    {
+      "file": "LICENSE",
+      "bytes": 1082,
+      "original_source_sha256": "5ea99049fe36140d37cd53389b7d8d1eb6781d96fd2486f2906d50aa29758776"
+    },
+    {
+      "file": "LICENSES.md",
+      "bytes": 978,
+      "original_source_sha256": "749560761f0ee9b13a340f90ccdd13f02d7747f721981abee2e35998b1b817c2"
+    },
+    {
+      "file": "blobs.S",
+      "bytes": 513,
+      "original_source_sha256": "080d50d500f11c4705ded3e07bb369c0521f7e1a2203a0a94aa354f154c48e22"
+    },
+    {
+      "file": "bootstrap.c",
+      "bytes": 17273,
+      "original_source_sha256": "72065bda9a5a68517c299a18ea6a28276eb156a2b8e053303e7b93959e02977e"
+    },
+    {
+      "file": "bootstrap.ld",
+      "bytes": 737,
+      "original_source_sha256": "ca12e82c31700756106a8e33cbe50f2c5cb630642de4a48effcc6d6574e4245e"
+    },
+    {
+      "file": "build.sh",
+      "bytes": 1734,
+      "original_source_sha256": "775d8b56af3cdaa885538d971cc7529e4a33656dc47afe5e734fe18d28d56f45"
+    },
+    {
+      "file": "entry.S",
+      "bytes": 3927,
+      "original_source_sha256": "c0f9fcc1782bd7b39192991ebed796de7b5e8329860ec97454bd1b19045bf713"
+    },
+    {
+      "file": "make-script.py",
+      "bytes": 2542,
+      "original_source_sha256": "22f774729e2c1f74977844d9684b9c50efc1342dfec2d209309399f415611fc6"
+    },
+    {
+      "file": "package.py",
+      "bytes": 2525,
+      "original_source_sha256": "8bf1fd3566f8d519d90b5f8d35080c5ddddfb19aa526b033fd3fdf5209224c0f"
+    },
+    {
+      "file": "verify-artifacts.py",
+      "bytes": 4143,
+      "original_source_sha256": "cbf5fa220c0a7a58aa11dd256fb15b87a4bdc73cfe8cd1c9dcbe64f5d2a6991d"
+    },
+    {
+      "file": "verify-binary.py",
+      "bytes": 23403,
+      "original_source_sha256": "682e8f350b5fafd0de84815f5b48b836538d9ae8e91ada79727bdfa783079fee"
+    }
+  ]
+}
