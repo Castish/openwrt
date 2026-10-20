@@ -1,0 +1,70 @@
+{
+  "source_snapshot": "uboot-autoboot-v1",
+  "files": [
+    {
+      "file": "Set-C80Boot.ps1",
+      "bytes": 2092,
+      "original_source_sha256": "f41747997792908541370a753ae8ad18fc525feb478c0797a657798174b99afd"
+    },
+    {
+      "file": "boot.c",
+      "bytes": 5223,
+      "original_source_sha256": "218f093fac19a73d55dcf6e218d11174ed89dedeac496234ddd0170a534cfb5b"
+    },
+    {
+      "file": "boot.ld",
+      "bytes": 456,
+      "original_source_sha256": "5aced25d24245e367e61df65cc23ab27e1849243ed0957fbed1f6ae14ddc19b0"
+    },
+    {
+      "file": "build.sh",
+      "bytes": 1035,
+      "original_source_sha256": "cd5d57febd425c999325a871adda32e04a9fcd40e531ead7afe7840c0668044e"
+    },
+    {
+      "file": "entry.S",
+      "bytes": 666,
+      "original_source_sha256": "310b8ea49e13fe371571ea6bcc2b1fbb162525c24b6fd66c39d75398ce3510f8"
+    },
+    {
+      "file": "make-flash-plan.py",
+      "bytes": 4758,
+      "original_source_sha256": "e6962052623189eb9edb21d60018b7e0a52c47706f2ca11d62e060c4d12afd08"
+    },
+    {
+      "file": "package.py",
+      "bytes": 2270,
+      "original_source_sha256": "305ff732814ebcedd306dcc39866a5ae7c69b29452b9a6eab8dd82d52771dec2"
+    },
+    {
+      "file": "run-qemu-ssh.sh",
+      "bytes": 848,
+      "original_source_sha256": "fff5dc5ddc34c4d9647184a680808faf9d3e638c8135cf79715a5c60f060ae05"
+    },
+    {
+      "file": "verify-artifacts.py",
+      "bytes": 3165,
+      "original_source_sha256": "f0c163132479044a8521e4a32bfbdff64c9f577274a5f7415bbedd85c4c9dad4"
+    },
+    {
+      "file": "verify-boot.py",
+      "bytes": 10565,
+      "original_source_sha256": "5664c18f6b40c6a0dcdeab9c5607a3388bb64116479db84cd4fedef1ca08dd39"
+    },
+    {
+      "file": "verify-native-decompress.py",
+      "bytes": 1841,
+      "original_source_sha256": "f1436f5b0bedf6cca6adccb7c8322f7ace04a2ee95e26ed45fdcb26158d3c62a"
+    },
+    {
+      "file": "verify-native-services.py",
+      "bytes": 4803,
+      "original_source_sha256": "f9a5861795712332436869930b3fed7a36e7b87523d3589c2ce1ef39754b0e63"
+    },
+    {
+      "file": "verify-ssh.py",
+      "bytes": 2479,
+      "original_source_sha256": "e25ca758f0935ef4cb1efafac82d9c383115cf100d11a826de7968bfef640137"
+    }
+  ]
+}
