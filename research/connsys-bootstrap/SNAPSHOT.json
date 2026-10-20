@@ -1,0 +1,6 @@
+{
+  "snapshot_kind": "source archive imported on 2026-10-20; not an original historical Git commit",
+  "source_files_byte_identical_to_workspace": true,
+  "runtime_keys_images_firmware_dumps_and_raw_hardware_logs_included": false,
+  "original_private_release_manifest_sha256": "9fc031ed326403818a84b8816191558c22f35bbcf994fdbdb6190f7bede15e52"
+}

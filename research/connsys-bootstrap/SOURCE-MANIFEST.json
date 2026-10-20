@@ -1,0 +1,65 @@
+{
+  "source_snapshot": "connsys-bootstrap",
+  "files": [
+    {
+      "file": "FIRMWARE-SOURCES.json",
+      "bytes": 1137,
+      "original_source_sha256": "14ef7748b6001206d367aa95e56f564a423f584f4ded69b7e4a0c828b14f229f"
+    },
+    {
+      "file": "LICENSE",
+      "bytes": 1082,
+      "original_source_sha256": "5ea99049fe36140d37cd53389b7d8d1eb6781d96fd2486f2906d50aa29758776"
+    },
+    {
+      "file": "LICENSES.md",
+      "bytes": 978,
+      "original_source_sha256": "749560761f0ee9b13a340f90ccdd13f02d7747f721981abee2e35998b1b817c2"
+    },
+    {
+      "file": "blobs.S",
+      "bytes": 513,
+      "original_source_sha256": "080d50d500f11c4705ded3e07bb369c0521f7e1a2203a0a94aa354f154c48e22"
+    },
+    {
+      "file": "bootstrap.c",
+      "bytes": 15118,
+      "original_source_sha256": "b9014135d4c32738de2e5f9bfc2d7e48fa984c6584da11e91c58e8d04b10f65e"
+    },
+    {
+      "file": "bootstrap.ld",
+      "bytes": 737,
+      "original_source_sha256": "ca12e82c31700756106a8e33cbe50f2c5cb630642de4a48effcc6d6574e4245e"
+    },
+    {
+      "file": "build.sh",
+      "bytes": 1734,
+      "original_source_sha256": "7b03bf1bcaa0e988087d29a15b3237fde036069a1424db12926b2859f3f4a0ad"
+    },
+    {
+      "file": "entry.S",
+      "bytes": 3927,
+      "original_source_sha256": "c0f9fcc1782bd7b39192991ebed796de7b5e8329860ec97454bd1b19045bf713"
+    },
+    {
+      "file": "make-script.py",
+      "bytes": 2542,
+      "original_source_sha256": "22f774729e2c1f74977844d9684b9c50efc1342dfec2d209309399f415611fc6"
+    },
+    {
+      "file": "package.py",
+      "bytes": 2474,
+      "original_source_sha256": "659cef34c245a79fe80199b7caee3f331e5e3b3a398eb546fa77ccaf7edb0344"
+    },
+    {
+      "file": "verify-artifacts.py",
+      "bytes": 4035,
+      "original_source_sha256": "a61161ad07909398a17a8862c32d6924c9120072d01832f57bceffe8d0ec9120"
+    },
+    {
+      "file": "verify-binary.py",
+      "bytes": 19431,
+      "original_source_sha256": "70b8eb7fa2f374b8ca364ff0b7b7fb9549f2b38c832d523c2996d4b753a7a3ce"
+    }
+  ]
+}

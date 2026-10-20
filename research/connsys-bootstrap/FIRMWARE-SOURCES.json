@@ -1,0 +1,27 @@
+{
+  "scope": "Private user-requested transformation of their supplied router firmware; no individual calibration/MAC data included",
+  "components": [
+    {
+      "file": "test_mcu.bin",
+      "source": "User-supplied Archer C80(RU)_V1_240812.zip, MiniFS/fw/mtk; matches installed TPOS1.13.2 firmware bytes",
+      "bytes": 72096,
+      "sha256": "2ce6788836de35335d5f9cbb6fb86cc8676b788020141b414a25539a18aa429e",
+      "crc32": "2ede9294",
+      "offset_in_payload": "0x4000",
+      "destination": "0x40000000",
+      "unchanged_vendor_bytes": true,
+      "license": "Original OEM component; not covered by own helper MIT license"
+    },
+    {
+      "file": "test_wifi.bin",
+      "source": "User-supplied Archer C80(RU)_V1_240812.zip, MiniFS/fw/mtk; matches installed TPOS1.13.2 firmware bytes",
+      "bytes": 169240,
+      "sha256": "b1dd35a7c544c162181222bf7770cba3cd225a406eba002181f72b1462b03141",
+      "crc32": "4e2c264c",
+      "offset_in_payload": "0x18000",
+      "destination": "0x40043000",
+      "unchanged_vendor_bytes": true,
+      "license": "Original OEM component; not covered by own helper MIT license"
+    }
+  ]
+}
