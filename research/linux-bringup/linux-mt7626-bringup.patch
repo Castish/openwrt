@@ -1,0 +1,127 @@
+--- a/arch/arm/mach-mediatek/mediatek.c
++++ b/arch/arm/mach-mediatek/mediatek.c
+@@ -41,6 +41,7 @@
+ 	"mediatek,mt6589",
+ 	"mediatek,mt6592",
+ 	"mediatek,mt7623",
++	"mediatek,mt7626",
+ 	"mediatek,mt7629",
+ 	"mediatek,mt8127",
+ 	"mediatek,mt8135",
+--- a/arch/arm/mach-mediatek/Kconfig
++++ b/arch/arm/mach-mediatek/Kconfig
+@@ -27,6 +27,10 @@
+ 	bool "MediaTek MT7623 SoCs support"
+ 	default ARCH_MEDIATEK
+ 
++config MACH_MT7626
++	bool "Experimental MediaTek MT7626 RAM bring-up"
++	select HAVE_ARM_ARCH_TIMER
++
+ config MACH_MT7629
+ 	bool "MediaTek MT7629 SoCs support"
+ 	default ARCH_MEDIATEK
+--- a/arch/arm/boot/dts/mediatek/Makefile
++++ b/arch/arm/boot/dts/mediatek/Makefile
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
++dtb-$(CONFIG_MACH_MT7626) += mt7626-archer-c80-v1-ram.dtb
+ dtb-$(CONFIG_ARCH_MEDIATEK) += \
+ 	mt2701-evb.dtb \
+ 	mt6580-evbp1.dtb \
+--- a/drivers/tty/serial/8250/8250_mtk.c
++++ b/drivers/tty/serial/8250/8250_mtk.c
+@@ -522,9 +522,14 @@
+ 	struct resource *regs;
+ 	int irq, err;
+ 
+-	irq = platform_get_irq(pdev, 0);
+-	if (irq < 0)
+-		return irq;
++	/* Experimental C80 bring-up: use 8250 timer polling until IRQ is verified. */
++	if (of_property_read_bool(pdev->dev.of_node, "tplink,bringup-polling"))
++		irq = 0;
++	else {
++		irq = platform_get_irq(pdev, 0);
++		if (irq < 0)
++			return irq;
++	}
+ 
+ 	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	if (!regs) {
+--- /dev/null
++++ b/arch/arm/boot/dts/mediatek/mt7626-archer-c80-v1-ram.dts
+@@ -0,0 +1,73 @@
++// SPDX-License-Identifier: GPL-2.0-only
++// Minimal experimental RAM-boot description, not a complete OpenWrt board DTS.
++/dts-v1/;
++#include <dt-bindings/interrupt-controller/arm-gic.h>
++
++/ {
++    model = "TP-Link Archer C80 v1 RU experimental RAM bring-up";
++    compatible = "tplink,archer-c80-v1", "mediatek,mt7626";
++    #address-cells = <1>;
++    #size-cells = <1>;
++    interrupt-parent = <&gic>;
++
++    aliases { serial0 = &uart0; };
++    chosen {
++        stdout-path = "serial0:115200n8";
++        bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 keep_bootcon loglevel=8 ignore_loglevel initcall_debug rdinit=/init panic=0 clk_ignore_unused";
++    };
++
++    memory@40000000 {
++        device_type = "memory";
++        reg = <0x40000000 0x02000000>;
++    };
++
++    cpus {
++        #address-cells = <1>;
++        #size-cells = <0>;
++        cpu@0 {
++            device_type = "cpu";
++            compatible = "arm,cortex-a7";
++            reg = <0>;
++        };
++    };
++
++    uart_clk: uart-clock {
++        compatible = "fixed-clock";
++        #clock-cells = <0>;
++        clock-frequency = <40000000>;
++    };
++
++    timer {
++        compatible = "arm,armv7-timer";
++        interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
++                     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
++                     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
++                     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>;
++        clock-frequency = <20000000>;
++    };
++
++    soc {
++        compatible = "simple-bus";
++        #address-cells = <1>;
++        #size-cells = <1>;
++        ranges;
++
++        gic: interrupt-controller@10310000 {
++            compatible = "arm,gic-400";
++            reg = <0x10310000 0x1000>, <0x10320000 0x1000>;
++            interrupt-controller;
++            #interrupt-cells = <3>;
++            #address-cells = <0>;
++        };
++
++        uart0: serial@11002000 {
++            compatible = "mediatek,mt6577-uart";
++            reg = <0x11002000 0x400>;
++            clocks = <&uart_clk>, <&uart_clk>;
++            clock-names = "baud", "bus";
++            // Temporary opt-in for the local driver patch: no guessed UART IRQ.
++            tplink,bringup-polling;
++            status = "okay";
++        };
++    };
++};
