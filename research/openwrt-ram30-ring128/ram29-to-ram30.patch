@@ -1,0 +1,112 @@
+--- a/drivers/soc/mediatek/c80_mcu_transport.c
++++ b/drivers/soc/mediatek/c80_mcu_transport.c
+@@ -460,17 +460,19 @@
+     if(!c) return -ENODEV;
+     mutex_lock(&c->lock);n=&c->result.net;
+     len=sysfs_emit(buf,
+-        "enabled=%u prepared=%u linked=%u closed=%u exhausted=%u stop_requested=%u name=c80wlan0 MTU=1400 ring_cells=512\n"
++        "enabled=%u prepared=%u linked=%u closed=%u exhausted=%u stop_requested=%u name=c80wlan0 MTU=1400 ring_cells=%u\n"
+         "submitted=%u headers=%u returned=%u completed=%u inflight=%u early_tokens=%u duplicate_tokens=%u TX_rejected=%u\n"
+         "RX_seen=%u raw=%u translated=%u bad_length=%u bad_format=%u bad_status=%u wrong_peer=%u bad_protocol=%u duplicates=%u\n"
+         "RX_delivered=%u dropped=%u ARP=%u IPv4=%u last_slot=%u CPU=%u DMA=%u ctrl=%08x wait_us=%u\n"
+         "recycling=%u payload_cells=16 payload_reuses=%u ring_wraps=%u token_wraps=%u stale_tokens=%u ownership_fault=%u active_us=%llu\n"
++        "active_slot=%u active_token=%u active_flags=%x allocated_descriptor_cells=512\n"
+         "Linux_ARP_IP_UDP_TCP=1 diagnostic_echo=0 one_open_peer=1 retained_after_stop_until_reboot=1\n",
+-        n->enabled,n->prepared,n->linked,n->closed,n->exhausted,n->stop_requested,
++        n->enabled,n->prepared,n->linked,n->closed,n->exhausted,n->stop_requested,c80_auth_ring_size(&c->io),
+         n->submitted,n->headers,n->returned,n->completed,n->inflight,n->early_tokens,n->duplicate_tokens,n->tx_rejected,
+         n->rx_seen,n->rx_raw,n->rx_translated,n->rx_bad_length,n->rx_bad_format,n->rx_bad_status,n->rx_wrong_peer,n->rx_bad_protocol,n->rx_duplicate,
+         n->rx_delivered,n->rx_dropped,n->rx_arp,n->rx_ipv4,n->last_slot,n->last_cpu,n->last_dma,n->last_ctrl,n->last_wait_us,
+-        n->recycling,n->payload_reuses,n->ring_wraps,n->token_wraps,n->stale_tokens,n->token_fault,n->active_us);
++        n->recycling,n->payload_reuses,n->ring_wraps,n->token_wraps,n->stale_tokens,n->token_fault,n->active_us,
++        n->active_slot,n->active_token,n->inflight && n->inflight<=C80_NET_RECYCLE_N?n->token[n->inflight-1]:0);
+     mutex_unlock(&c->lock);return len;
+ }
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+--- a/drivers/soc/mediatek/c80_mcu_core.h
++++ b/drivers/soc/mediatek/c80_mcu_core.h
+@@ -101,7 +101,15 @@
+     c80_u32 dma_base;
+ };
+ static c80_u32 c80_auth_ring_size(const struct c80_io *io)
+-{ return io->netdev_test?C80_NET_RING_N:C80_AUTH_N; }
++{
++    /* RAM29 stopped before consuming slot127 when CPU128 was published.
++     * OEM ordinary rings use512; that alone does not prove the missing
++     * initialization for indices>=128. Keep the allocation/legacy profile,
++     * but the recyclable mode now programs128 and wraps127->0. No live
++     * resizing, index reset, timeout extension or completion fabrication. */
++    return io->net_recycle_test?C80_NET_RECYCLE_RING_N:
++        io->netdev_test?C80_NET_RING_N:C80_AUTH_N;
++}
+ 
+ /* Keep the legacy30s mode for regression fixtures; Linux explicitly opts
+  * into the180s client window. All client deadlines derive from this target. */
+@@ -1946,6 +1954,10 @@
+     if(!rc && r->nvm_valid) rc=c80_nvm_roundtrip(io,r);
+     if(!rc && io->devinfo_test) rc=c80_devinfo_roundtrip(io,r);
+ done:
++    if(rc && io->net_recycle_test && r->net.inflight &&
++       r->net.active_slot<C80_NET_RECYCLE_RING_N)
++        c80_transport_snapshot(io,r,5,r->net.active_slot,
++                               &io->pool->auth_tx[r->net.active_slot]);
+     c80_net_close(io,r);
+     r->primary=rc; c80_cleanup(io,r);
+     return r->critical?r->critical:r->cleanup?C80_RESTORE:rc;
+--- a/drivers/soc/mediatek/c80_net_types.h
++++ b/drivers/soc/mediatek/c80_net_types.h
+@@ -5,6 +5,7 @@
+  * 16 payload cells and the512 descriptor ring after paired completion.
+  * The separate management headers/payloads remain immutable. */
+ #define C80_NET_RING_N 512u
++#define C80_NET_RECYCLE_RING_N 128u
+ #define C80_NET_TX_N 256u
+ #define C80_NET_TOKEN_BASE 16u
+ #define C80_NET_RECYCLE_N 16u
+--- a/drivers/soc/mediatek/c80_net_core.h
++++ b/drivers/soc/mediatek/c80_net_core.h
+@@ -155,17 +155,17 @@
+     if(!n->linked && !n->closed) { n->linked=1;io->net_link(io->context,1); }
+     if(n->inflight) {
+         index=n->inflight-1;slot=n->active_slot;
+-        if(!n->submitted || index>=C80_NET_RECYCLE_N || slot>=C80_NET_RING_N ||
+-           index!=(n->submitted-1u)%C80_NET_RECYCLE_N || slot!=(n->submitted+1u)%C80_NET_RING_N ||
++        if(!n->submitted || index>=C80_NET_RECYCLE_N || slot>=C80_NET_RECYCLE_RING_N ||
++           index!=(n->submitted-1u)%C80_NET_RECYCLE_N || slot!=(n->submitted+1u)%C80_NET_RECYCLE_RING_N ||
+            n->cell_generation[index]!=n->submitted ||
+            n->descriptor_generation[slot]!=n->submitted ||
+            n->submitted!=n->completed+1u ||
+            n->active_token!=C80_NET_TOKEN_BASE+(n->submitted-1u)%C80_NET_TOKEN_COUNT) return C80_NET_REUSE;
+-        next=(slot+1u)%C80_NET_RING_N;d=&io->pool->auth_tx[slot];cell=&io->pool->net.tx[index];
++        next=(slot+1u)%C80_NET_RECYCLE_RING_N;d=&io->pool->auth_tx[slot];cell=&io->pool->net.tx[index];
+         ctrl=d->ctrl;if(ctrl&C80_DONE) io->dma_order(io->context,0);
+         n->last_ctrl=ctrl;n->last_cpu=c80_read(io,C80_AUTH_RING+8);n->last_dma=c80_read(io,C80_AUTH_RING+12);
+         if(c80_read(io,C80_AUTH_RING)!=c80_dma_address(io,io->pool->auth_tx) ||
+-           c80_read(io,C80_AUTH_RING+4)!=C80_NET_RING_N || n->last_cpu!=next ||
++           c80_read(io,C80_AUTH_RING+4)!=C80_NET_RECYCLE_RING_N || n->last_cpu!=next ||
+            (n->last_dma!=slot && n->last_dma!=next) ||
+            (ctrl&~C80_DONE)!=(C80_LS0|(64u<<16)) || d->info ||
+            d->addr!=c80_dma_address(io,cell->header) || d->addr1!=c80_dma_address(io,cell->frame)) return C80_NET_DESC;
+@@ -182,18 +182,18 @@
+     if(n->submitted!=n->completed) return C80_NET_REUSE;
+     if(n->submitted==0xffffffffu) return C80_NET_COUNTER;
+     len=io->net_dequeue(io->context,io->pool->net.ethernet,C80_NET_ETH_MAX);if(!len) return 0;
+-    index=n->submitted%C80_NET_RECYCLE_N;slot=(n->submitted+2u)%C80_NET_RING_N;
+-    token=C80_NET_TOKEN_BASE+n->submitted%C80_NET_TOKEN_COUNT;next=(slot+1u)%C80_NET_RING_N;
++    index=n->submitted%C80_NET_RECYCLE_N;slot=(n->submitted+2u)%C80_NET_RECYCLE_RING_N;
++    token=C80_NET_TOKEN_BASE+n->submitted%C80_NET_TOKEN_COUNT;next=(slot+1u)%C80_NET_RECYCLE_RING_N;
+     d=&io->pool->auth_tx[slot];cell=&io->pool->net.tx[index];
+     if(c80_read(io,C80_AUTH_RING)!=c80_dma_address(io,io->pool->auth_tx) ||
+-       c80_read(io,C80_AUTH_RING+4)!=C80_NET_RING_N ||
++       c80_read(io,C80_AUTH_RING+4)!=C80_NET_RECYCLE_RING_N ||
+        c80_read(io,C80_AUTH_RING+8)!=slot || c80_read(io,C80_AUTH_RING+12)!=slot) return C80_NET_DESC;
+     if(n->cell_generation[index]!=(n->submitted>=C80_NET_RECYCLE_N?n->submitted-C80_NET_RECYCLE_N+1u:0u)) return C80_NET_REUSE;
+     if(n->cell_generation[index] &&
+        (n->cell_generation[index]>n->completed || n->token[index]!=7u)) return C80_NET_REUSE;
+     if(!n->cell_generation[index] && n->token[index]) return C80_NET_REUSE;
+     old=n->descriptor_generation[slot];
+-    if(old!=(n->submitted>=C80_NET_RING_N?n->submitted-C80_NET_RING_N+1u:0u)) return C80_NET_REUSE;
++    if(old!=(n->submitted>=C80_NET_RECYCLE_RING_N?n->submitted-C80_NET_RECYCLE_RING_N+1u:0u)) return C80_NET_REUSE;
+     if(old) {
+         old_index=(old-1u)%C80_NET_RECYCLE_N;
+         if(old>n->completed || d->ctrl!=(C80_DONE|C80_LS0|(64u<<16)) || d->info ||
