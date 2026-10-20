@@ -1,0 +1,136 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -21,6 +21,7 @@
+ #define C80_HIF 0x18000000u
+ #define C80_OWN (C80_HIF+0x7000)
+ #define C80_GLO (C80_HIF+0x4208)
++#define C80_DOWNLOAD_MODE 0x200u /* Actual OEM40308dd0, WPDMA download mode. */
+ #define C80_MASK (C80_HIF+0x4204)
+ #define C80_SOURCE (C80_HIF+0x4200)
+ #define C80_RESET 0x10212018u
+@@ -56,7 +57,7 @@
+     C80_BAD_DMA=9,C80_MAIN_CRC=10,C80_RINGS_CONFIGURED=11,C80_TX_TIMEOUT=12,
+     C80_RX_TIMEOUT=13,C80_RX_BAD=14,C80_SEMAPHORE=15,C80_RESTORE=16,
+     C80_RING_PROGRAM=17,C80_DOWNLOAD_STATUS=18,C80_FWDL_TIMEOUT=19,
+-    C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,
++    C80_PATCH_NOT_READY=20,C80_BAD_SYNC=21,C80_MAIN_NOT_READY=22,C80_MODE_REFUSED=23,
+     C80_CRITICAL_RESET=80,C80_CRITICAL_DMA=81
+ };
+ struct c80_result {
+@@ -79,6 +80,10 @@
+     c80_u32 main_region_valid,main_region_status[3],main_region_bytes[3],main_region_chunks[3];
+     c80_u32 main_start_attempted,main_start_valid,main_start_status,main_ready;
+     c80_u32 main_sync_before,main_sync_after;
++    c80_u32 download_mode_checked,download_enable_glo,download_last_glo;
++    c80_u32 failure_snapshot,failure_phase,failure_ring,failure_slot;
++    c80_u32 failure_cpu,failure_dma,failure_desc[4];
++    c80_u32 failure_glo,failure_mask,failure_source,failure_sync,failure_own;
+ };
+ #define C80_CLEANUP_CONTROL 1u
+ #define C80_CLEANUP_GLO 2u
+@@ -176,12 +181,38 @@
+     r->sequence=r->sequence==15?1:r->sequence+1;
+     return r->sequence;
+ }
++static int c80_download_mode(struct c80_io *io,struct c80_result *r)
++{
++    r->download_last_glo=c80_read(io,C80_GLO);
++    return r->download_last_glo!=0xffffffffu &&
++           (r->download_last_glo&C80_DOWNLOAD_MODE);
++}
++/* Preserve the live transport state BEFORE cleanup changes the ring controls.
++ * Only already-used readable registers and coherent descriptors are read.
++ * No acknowledgement, reset, interrupt enable or diagnostic selector writes. */
++static void c80_transport_snapshot(struct c80_io *io,struct c80_result *r,
++                                    c80_u32 ring,c80_u32 slot,struct c80_desc *d)
++{
++    r->failure_snapshot=1; r->failure_phase=r->phase;
++    r->failure_ring=ring; r->failure_slot=slot;
++    io->dma_order(io->context,0);
++    r->failure_desc[0]=d->addr; r->failure_desc[1]=d->ctrl;
++    r->failure_desc[2]=d->addr1; r->failure_desc[3]=d->info;
++    r->failure_cpu=c80_read(io,0x18004308+16*ring);
++    r->failure_dma=c80_read(io,0x1800430c+16*ring);
++    r->failure_glo=c80_read(io,C80_GLO);
++    r->failure_mask=c80_read(io,C80_MASK);
++    r->failure_source=c80_read(io,C80_SOURCE);
++    r->failure_sync=c80_read(io,C80_SYNC);
++    r->failure_own=c80_read(io,C80_OWN);
++}
+ static c80_u32 c80_exchange(struct c80_io *io,struct c80_result *r,c80_u32 cid,
+                             const c80_u8 *body,c80_u32 bytes,c80_u32 *reply)
+ {
+     c80_u32 slot=r->command_submitted,sequence=c80_next_sequence(r),i,rx=0,tx=0,rc,len;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_COMMAND_SLOTS || bytes>192 || !sequence || sequence>15) return C80_TX_TIMEOUT;
++    if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+     len=c80_command(io->pool->command[slot],cid,body,bytes,sequence);
+     d=&io->pool->tx[slot]; d->addr=c80_dma_address(io,io->pool->command[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+@@ -203,6 +234,7 @@
+         if(now<start || now-start>=2000000) break;
+         io->delay_us(io->context,50);
+     }
++    c80_transport_snapshot(io,r,15,slot,d);
+     return tx?C80_RX_TIMEOUT:C80_TX_TIMEOUT;
+ }
+ static c80_u32 c80_semaphore(struct c80_io *io,struct c80_result *r,
+@@ -217,6 +249,7 @@
+     c80_u32 slot=r->fwdl_submitted,sequence=c80_next_sequence(r),i,len;
+     c80_u64 start,now; struct c80_desc *d;
+     if(slot>=C80_FRAGMENT_SLOTS || !bytes || bytes>960 || sequence>15) return C80_FWDL_TIMEOUT;
++    if(!c80_download_mode(io,r)) return C80_MODE_REFUSED;
+     len=c80_command(io->pool->fragment[slot],0xee,body,bytes,sequence);
+     d=&io->pool->fwdl[slot]; d->addr=c80_dma_address(io,io->pool->fragment[slot]);
+     d->addr1=0; d->info=0; d->ctrl=C80_LS0|(len<<16);
+@@ -237,6 +270,7 @@
+         if(now<start || now-start>=2000000) break;
+         io->delay_us(io->context,50);
+     }
++    c80_transport_snapshot(io,r,3,slot,d);
+     return C80_FWDL_TIMEOUT;
+ }
+ static c80_u32 c80_patch(struct c80_io *io,struct c80_result *r,
+@@ -500,6 +534,14 @@
+     io->dma_order(io->context,1); r->dma_cfg_touched=1;
+     c80_write(io,C80_GLO,r->glo_before|0xc45); r->dma_started=1;
+     if((c80_read(io,C80_GLO)&0xc45)!=0xc45) { rc=C80_BAD_DMA; goto done; }
++    /* OEM40308dd0 enables GLO bit9 around both patch/main dispatchers.
++     * RAM5 omitted it. Keep the hardware-proven TX15 command / FWDL3 data
++     * paths; do not import another chip's scheduler/credit configuration.
++     * Cleanup first stops MCU/DMA, then restores the exact saved GLO value. */
++    c80_write(io,C80_GLO,c80_read(io,C80_GLO)|C80_DOWNLOAD_MODE);
++    r->download_enable_glo=c80_read(io,C80_GLO);
++    r->download_mode_checked=1;
++    if(!c80_download_mode(io,r)) { rc=C80_MODE_REFUSED; goto done; }
+     rc=c80_patch(io,r,&fw[4]);
+     if(!rc) rc=c80_main_firmware(io,r,&fw[5]);
+ done:
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -114,6 +114,10 @@
+         "main_region_bytes=%u/%u/%u chunks=%u/%u/%u\n"
+         "main_start_attempted=%u valid=%u status=%u ready=%u\n"
+         "main_sync_before=%08x after=%08x wanted_state=3\n"
++        "download_mode_checked=%u enable_glo=%08x last_glo=%08x mode_mask=00000200\n"
++        "failure_snapshot=%u phase=%u ring=%u slot=%u cpu=%08x dma=%08x\n"
++        "failure_desc=%08x/%08x/%08x/%08x\n"
++        "failure_glo=%08x mask=%08x source=%08x sync=%08x own=%08x\n"
+         "fresh_boot_required=%u power_cycle_required=%u wifi_ap_tested=0 flash_writes=0\n",
+         c->ran,c->finished,c->rc,r->primary,r->cleanup,r->critical,r->phase,
+         r->ready,r->own_before,r->own_last,r->own_sent,r->main_crc[0],r->main_crc[1],
+@@ -143,7 +147,13 @@
+         r->main_region_bytes[0],r->main_region_bytes[1],r->main_region_bytes[2],
+         r->main_region_chunks[0],r->main_region_chunks[1],r->main_region_chunks[2],
+         r->main_start_attempted,r->main_start_valid,r->main_start_status,r->main_ready,
+-        r->main_sync_before,r->main_sync_after,c->ran,!!c->result.critical);
++        r->main_sync_before,r->main_sync_after,
++        r->download_mode_checked,r->download_enable_glo,r->download_last_glo,
++        r->failure_snapshot,r->failure_phase,r->failure_ring,r->failure_slot,
++        r->failure_cpu,r->failure_dma,
++        r->failure_desc[0],r->failure_desc[1],r->failure_desc[2],r->failure_desc[3],
++        r->failure_glo,r->failure_mask,r->failure_source,r->failure_sync,r->failure_own,
++        c->ran,!!c->result.critical);
+     mutex_unlock(&c->lock); return n;
+ }
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
