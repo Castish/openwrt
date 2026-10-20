@@ -1,0 +1,35 @@
+{
+  "source_snapshot": "switch-mdio-probe",
+  "files": [
+    {
+      "file": "build.sh",
+      "bytes": 776,
+      "original_source_sha256": "906e8482416bc62942f688fe5b19288cecdecb73c3b3915ecd1b7e8844e08dd9"
+    },
+    {
+      "file": "c80-switch-probe.S",
+      "bytes": 9388,
+      "original_source_sha256": "6ac381a1956afd07c42de0e5dcf178d3303fe286ebb48186499d5c39db7f6c0c"
+    },
+    {
+      "file": "probe.ld",
+      "bytes": 385,
+      "original_source_sha256": "cf74501d2bf211020140eb6504981670d88a4512ec6d07475d5b8dbd7cb9b523"
+    },
+    {
+      "file": "uart-print.S",
+      "bytes": 1206,
+      "original_source_sha256": "7aeb7a7b170fa347877ae0d3c6422e981cb2ea09316d48d7b76894d53bb869e2"
+    },
+    {
+      "file": "verify-binary.py",
+      "bytes": 15668,
+      "original_source_sha256": "67d5c6bb29ea1690576056942b1176c51d32e17bfc8067315fe09ced5c7f7bcd"
+    },
+    {
+      "file": "verify-reentry.py",
+      "bytes": 1908,
+      "original_source_sha256": "5e04300dc098a3d486e41f10188ce7c24f83cdc7809cace44fa1d90ab2534264"
+    }
+  ]
+}
