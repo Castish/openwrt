@@ -189,3 +189,7 @@ refresh до PTK/авторизации через два подтверждён
 **Аппаратный результат RAM39:** после исправления ошибочного имени ядра в helper первый WPA2 handshake завершился: GTK refresh1, PTK/authorized1, EAPOL2/2, encryptedTX/RX7/29. После отключения клиента повторное подключение не прошло. Auth/assoc остались1/1, deauth/disassoc0, bad34→206; причины RXD-отбрасывания ещё не измерены. Остановка чистая: DMAidle/MCUstopped,72/72TX,41/41/41command, inflight0,MemAvailable7744KiB. Подтверждения DHCP-аренды, маршрута, ping и TCP ещё нет. Ошибка helper исправлена отдельно в [helper guard fix1](../research/ram39-helper-guard-fix/); исходный архив RAM39 не переписан.
 
 | [ram39-helper-guard-fix](../research/ram39-helper-guard-fix/) | точное имя ядра в helper; внешний CPIO;15QEMU checks; kernel unchanged | 6 |
+
+## RAM40: current-peer plaintext management RX gate
+
+[RAM40](../research/openwrt-ram40-rx-status/) сохраняет первый GTK refresh, channel1 и ключевую политику RAM39. При живом PTK допускает обычные lifecycle management кадры того же peer с CCMP WCID/CipherMis, сохраняя проверки ошибок/RSN/данных. В report добавлены RX gate причины.3871native/48QEMU/13startup-removal checks пройдены. Конкретные аппаратные RXD-флаги RAM39 и результат RAM40 пока неизвестны. Экспортировано 108 исходных файлов.

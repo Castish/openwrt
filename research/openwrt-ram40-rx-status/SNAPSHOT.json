@@ -1,0 +1,61 @@
+{
+  "passed": true,
+  "release": "C80 OpenWrt RAM40 current-peer plaintext management RX status trial",
+  "kernel": "6.12.113-c80-openwrt-ram40-rx-status",
+  "layout": {
+    "build": {
+      "entry": "40208000",
+      "high_end": "40b76638",
+      "auth_initrd_start": "40d00000"
+    },
+    "build-qemu": {
+      "entry": "40208000",
+      "high_end": "40c777f8",
+      "auth_initrd_start": "40d00000"
+    }
+  },
+  "changed_production_sources": [
+    "c80_mcu_core.h",
+    "c80_mcu_transport.c"
+  ],
+  "native_cases": 3871,
+  "all_native_suites_rerun": true,
+  "new_RX_status_cases": 118,
+  "old_RAM39_actual_gate_refusal_reproduced": true,
+  "physical_failed_frame_RXD_flags_known": false,
+  "exception_requires_live_current_peer_WPA2_PTK": true,
+  "exception_only_plaintext_lifecycle_management": true,
+  "FCS_ICV_MIC_length_translation_errors_not_waived": true,
+  "encrypted_data_key_PN_policy_unchanged": true,
+  "initial_GTK_refresh_unchanged": true,
+  "RX_gate_saved_scalar_metadata_no_keys_addresses_packets": true,
+  "QEMU_WPA2_checks": 48,
+  "QEMU_actual_helper_guard_checks": 5,
+  "actual_ARM_report_callback_cases": 32,
+  "QEMU_startup_removal_checks": 13,
+  "QEMU_real_Linux_protocol_cases": 13,
+  "QEMU_memory_available_KiB": 6568,
+  "helper_expected_release_matches_actual_kernel": true,
+  "rootfs_changed": [
+    "etc/c80-hostapd.conf",
+    "usr/sbin/c80-wifi"
+  ],
+  "full_patch_files": 32,
+  "full_source_entries_restored": 86729,
+  "signed_packages_unchanged": 45,
+  "ELF_files": 66,
+  "DMA_pool_bytes": 668112,
+  "parent_OEM_ARM_builder_cases_inherited_not_rerun": 23,
+  "OEM_key_BMC_channel_packet_constructors_unchanged": true,
+  "hostapd_channel": 1,
+  "frequency_MHz": 2412,
+  "AP_restart_same_boot_supported": false,
+  "new_NOR_or_UBoot_write_required": false,
+  "hardware_tested": false,
+  "QEMU_MCU_DMA_CCMP_RF_emulated": false,
+  "SSID_visibility_fix_claimed": false,
+  "snapshot_kind": "Original RAM40 management RX status trial sources",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "original_personal_archive_sha256": "f3736e818cba85c716a4a985a7ce7e2fd4efa55d70e81015823f7390dfa4a6eb",
+  "private_keys_binary_images_OEM_inputs_included": false
+}

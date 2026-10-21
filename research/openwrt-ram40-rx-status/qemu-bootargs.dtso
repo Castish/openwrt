@@ -1,0 +1,12 @@
+/dts-v1/;
+/plugin/;
+/ {
+    fragment@0 {
+        target-path = "/chosen";
+        __overlay__ {
+            bootargs = "console=ttyAMA0,115200 rdinit=/init panic=0";
+            linux,initrd-start = <0x40d00000>;
+            linux,initrd-end = <0x40d01000>;
+        };
+    };
+};

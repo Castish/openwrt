@@ -35,11 +35,15 @@ C80-RAM36 однажды появилась в поиске, после reboot �
 установку до PTK/авторизации. Первый физический WPA2 handshake завершён; повторное подключение пока не проходит.
 DHCP/IP ещё не подтверждены. [Отдельный helper fix](research/ram39-helper-guard-fix/)
 исправляет ошибочное имя ядра при запуске; прежний архив сохранён.
+[RAM40](research/openwrt-ram40-rx-status/) проверяет узкое исключение RX
+для обычных управляющих кадров прежнего WPA2-клиента и сохраняет причины
+отбрасывания.3871native/48QEMU проверки прошли; аппаратное переподключение ожидается.
 
 - [История этапов и результаты](docs/HISTORY.md)
 - [Структура и сборка](docs/BUILD.md)
 - [Состав публикации и приватные файлы](docs/PUBLICATION.md)
-- [Каталог65 исходных снимков](docs/source-catalog.json)
+- [Каталог66 исходных снимков](docs/source-catalog.json)
+- [Исходники RAM40 с диагностикой RX](research/openwrt-ram40-rx-status/)
 - [Исходники RAM39 с обновлением GTK](research/openwrt-ram39-gtk-init/)
 - [Исходники RAM38 с заводским профилем BMC](research/openwrt-ram38-bmc-profile/)
 - [Исходники RAM37 на канале1](research/openwrt-ram37-channel1/)

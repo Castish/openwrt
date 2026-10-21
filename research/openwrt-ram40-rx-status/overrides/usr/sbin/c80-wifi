@@ -1,0 +1,81 @@
+#!/bin/sh
+. /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+case "${1:-}" in
+start)
+    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram40-rx-status' ] || { echo 'Requires the RAM40 cfg80211 router kernel.';exit 1; }
+    mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+    /etc/init.d/dnsmasq start
+    ( echo 1 > /sys/kernel/c80_wifi/run
+      echo "$?" > /tmp/c80-wifi-once/write-result
+      # Also close userspace after an unsolicited transport failure. The kernel
+      # sends STOP_AP; stock hostapd only logs this event without tearing down.
+      # This worker owns procd cleanup. The foreground stop only requests
+      # kernel teardown, so normal completion cannot delete the service twice.
+      service_state=$(ubus call service list '{"name":"c80-hostapd"}' 2>/dev/null)
+      case "$service_state" in *'"c80-hostapd":'*) /etc/init.d/c80-hostapd stop;; esac
+      touch /tmp/c80-wifi-once/finished
+    ) > /tmp/c80-wifi-once/run.log 2>&1 &
+    echo "$!" > /tmp/c80-wifi-once/pid
+    n=0
+    while [ "$n" -lt 45 ]; do
+        control=$(cat /sys/kernel/c80_wifi/control) || exit 1
+        case "$control" in *finished=1*) echo 'Preparation failed; use c80-wifi report.';exit 1;; esac
+        case "$control" in *prepared=1*) break;; esac
+        sleep 1;n=$((n+1))
+    done
+    if [ "$n" -eq 45 ]; then echo 1 > /sys/kernel/c80_wifi/stop;echo 'Preparation timed out; wait for Finished and collect report.';exit 1;fi
+    c80_wifi_network_prepare /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;echo 'Network setup failed; collect report.';exit 1; }
+    /etc/init.d/c80-hostapd start || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+    ubus -t 10 wait_for hostapd || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+    # Let netifd's initial empty configuration settle before adding this test AP.
+    sleep 1
+    phy=$(basename "$(readlink -f /sys/class/net/c80wlan0/phy80211)")
+    cp /etc/c80-hostapd.conf /tmp/c80-wifi-once/hostapd.conf
+    printf 'bssid=%s\n' "$(cat /sys/class/net/c80wlan0/address)" >> /tmp/c80-wifi-once/hostapd.conf
+
+    ubus call hostapd config_set "{\"phy\":\"$phy\",\"radio\":-1,\"config\":\"/tmp/c80-wifi-once/hostapd.conf\"}" || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+
+    n=0
+    while [ "$n" -lt 12 ];do
+        control=$(cat /sys/kernel/c80_wifi/control) || exit 1
+        case "$control" in *finished=1*) echo 'AP setup failed; collect report.';exit 1;; esac
+        case "$control" in *active=1*) break;; esac
+        sleep 1;n=$((n+1))
+    done
+    if [ "$n" -eq 12 ];then echo 1 > /sys/kernel/c80_wifi/stop;echo 'hostapd setup timed out; collect report.';exit 1;fi
+    /etc/init.d/dnsmasq restart || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+    # Observe state again after DHCP setup; an earlier START_AP ACK is not
+    # evidence that a later network operation kept the AP running.
+    sleep 1
+    c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+    echo 'hostapd started C80-RAM40 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+    ;;
+stop)
+    echo 1 > /sys/kernel/c80_wifi/stop || exit 1
+    echo 'Stop requested. Wait for Finished before reboot.'
+    ;;
+status)
+    cat /sys/kernel/c80_wifi/control
+    if [ -e /tmp/c80-wifi-once/finished ];then echo 'Finished. Use c80-wifi report.'
+    elif [ -d /tmp/c80-wifi-once ];then echo 'Running.'
+    else echo 'Not started.';fi
+    cat /sys/kernel/c80_wifi/security
+    cat /sys/kernel/c80_wifi/session
+    iw dev 2>/dev/null
+    ;;
+diag)
+    cat /sys/kernel/c80_wifi/control /sys/kernel/c80_wifi/beacon_diag
+    ;;
+report)
+    if [ ! -e /tmp/c80-wifi-once/finished ];then echo 'Use status until Finished.';exit 1;fi
+    uname -r
+    cat /tmp/c80-wifi-once/run.log
+    logread -e hostapd
+    cat /sys/kernel/c80_wifi/control
+    for f in beacon_diag security session mgmt status scheduler netdev completion association;do cat /sys/kernel/c80_wifi/$f;done
+    ifconfig c80wlan0 2>/dev/null
+    ubus call network.interface.wifi_ram status
+    free
+    ;;
+*) echo 'Usage: c80-wifi start|status|diag|stop|report';exit 1;;
+esac

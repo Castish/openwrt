@@ -193,3 +193,7 @@ verify-gtk-refresh.sh исполняет текущий core и старый RAM
 ## Helper guard fix1
 
 В исходном RAM39 helper ожидал неверный суффикс bmc-profile. Отдельный снимок ram39-helper-guard-fix исправляет guard через внешний 8KiB CPIO; только initrd-end меняется в DTB. Старый ZIP и ядро неизменны. Следующие сборки должны сравнивать ожидаемое имя helper с фактическим build/include/config/kernel.release и исполнять guard в QEMU с ограниченным version fixture до запуска MCU.
+
+## RAM40: RX management status trial
+
+Полный Linux patch32файла, ram39-to-ram40.patch, verify-management-status.sh и verify-artifacts.py связывают новые RX правила, 118новых/3871freshnative cases и exact kernel/helper version. QEMU48checks (включая5actualhelperguards),13removalchecks; подлинные RF/MCU/CCMP эффекты не эмулируются. Диагностика в mgmt включена в helper report. Персональный комплект загружается прежним autoTFTP через четыре payloads и c80-start.txt последним.
