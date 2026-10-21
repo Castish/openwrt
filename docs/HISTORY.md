@@ -63,7 +63,7 @@
 | [openwrt-ram33-reconnect](../research/openwrt-ram33-reconnect/) | повторное подключение при работающей AP: 8 подключений/8 отключений и чистая остановка подтверждены на плате | 78 |
 | [openwrt-ram34-wpa2](../research/openwrt-ram34-wpa2/) | WPA2-PSK/CCMP через hostapd; программные проверки прошли, аппаратный тест ожидается | 89 |
 | [openwrt-ram35-netup](../research/openwrt-ram35-netup/) | AP сохраняется после DHCP, SSID не найден, остановка чистая | 92 |
-| [openwrt-ram36-beacon-diag](../research/openwrt-ram36-beacon-diag/) | снимки до/после BMC/GTK и до очистки, неблокирующие отчёты; аппаратный тест ожидается | 95 |
+| [openwrt-ram36-beacon-diag](../research/openwrt-ram36-beacon-diag/) | видимость SSID, четыре снимка и чистая остановка подтверждены; клиент ещё не подключался | 95 |
 
 ## Подтверждённый рубеж RAM31
 
@@ -130,4 +130,8 @@ RAM36 хранит четыре MAC-снимка до/после BMC/GTK и до
 читает CPU-копию,13 legacy callbacks возвращают EBUSY при активном run.
 3624 native,13 OEM ARM,32 ARM report callbacks,37 QEMU WPA2 integration и13
 startup-removal cases прошли. Команды радио/ключей/маяка прежние; это диагностика,
-не заявленное исправление RF. Аппаратный RAM36 результат ожидается.
+не заявленное исправление RF. На плате владелец увидел C80-RAM36, но клиент
+не подключал. Live/stopped diag вернули3/4снимка. До очистки при GTK/BMC live
+счётчик357 через36,54секунды после установки ключа; причина отличия RAM35/36
+не установлена. Остановка чистая,32commandsACK,0fault,MCU stopped/DMA idle.
+Следующий тест — один WPA2/DHCP клиент на той же RAM36 после обычного reboot.
