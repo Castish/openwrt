@@ -1,0 +1,15 @@
+{
+  "snapshot_kind": "Original helper guard fix1 source, unchanged RAM39 kernel",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "hardware_tested": false,
+  "helper_QEMU_checks": 15,
+  "actual_installed_helper_guard_executed": true,
+  "personal_auth_entries_preserved": 6,
+  "CPIO_bytes": 8192,
+  "kernel_and_handoff_unchanged": true,
+  "parent_native_cases_inherited_not_rerun": 3753,
+  "parent_QEMU_cases_not_rerun": 43,
+  "new_AP_or_radio_hardware_test": false,
+  "private_binary_payloads_included": false,
+  "original_personal_archive_sha256": "542001361f333dcddcac07961a664dd3f3f35b8ba4d8efc81793f5c622e0bf2a"
+}

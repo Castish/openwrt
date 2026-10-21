@@ -1,5 +1,7 @@
 # RAM39: обновление GTK при первом клиенте
 
+**Аппаратный результат RAM39:** после исправления ошибочного имени ядра в helper первый WPA2 handshake завершился: GTK refresh1, PTK/authorized1, EAPOL2/2, encryptedTX/RX7/29. После отключения клиента повторное подключение не прошло. Auth/assoc остались1/1, deauth/disassoc0, bad34→206; причины RXD-отбрасывания ещё не измерены. Остановка чистая: DMAidle/MCUstopped,72/72TX,41/41/41command, inflight0,MemAvailable7744KiB. Подтверждения DHCP-аренды, маршрута, ping и TCP ещё нет. Ошибка helper исправлена отдельно в [helper guard fix1](../ram39-helper-guard-fix/); исходный архив RAM39 не переписан.
+
 В RAM38 владелец увидел защищённую C80-RAM38. Клиент дважды прошёл ассоциацию,
 AP приняла и отправила по два EAPOL, но hostapd сообщил key addition failed /
 GMK/GTK setup failed. В драйвере refused=2, PTK и авторизации нет. До очистки
@@ -85,7 +87,7 @@ c80-wifi stop, status до Finished, c80-wifi diag и c80-wifi report.
 отсутствия GMK/GTK setup failed. Сохраняются неверный MIC, два авторизованных
 подключения,13LinuxDHCP/IP/TCP checks,pinnedSSH и32actualARMreportcallbacks.
 Ещё13startup-removal checks проверяют корректное завершение AP. Физические
-MCU/CCMP/DMA/RF в QEMU не эмулируются; аппаратный тест RAM39 ожидается.
+MCU/CCMP/DMA/RF в QEMU не эмулируются; физический результат приведён в начале этого документа.
 
 Один клиент,2.4GHz/CCK/802.11b/20MHz/MTU1400; group→PTK unicast, периодический
 GTK rekey отключён, GTK не используется для TX. Нет WPA3/PMF/5GHz/HT/VHT,

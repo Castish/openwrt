@@ -1,0 +1,35 @@
+{
+  "source_snapshot": "ram39-helper-guard-fix",
+  "files": [
+    {
+      "file": "auth-helper.dtso",
+      "bytes": 193,
+      "original_source_sha256": "36d2d48dac9f6206760766fbe5b181e5ab52c5a6791a76fefb6ba0329cc846bc"
+    },
+    {
+      "file": "build-overlay.py",
+      "bytes": 6054,
+      "original_source_sha256": "976606877fc53e46c7d9f80df7a3f76ff6c042246f62aee73ae25b8275ce578c"
+    },
+    {
+      "file": "c80-wifi",
+      "bytes": 4199,
+      "original_source_sha256": "19e776a27387137c28be75d49c6299189f52ca4897e81af42491e98574e40a1e"
+    },
+    {
+      "file": "package.py",
+      "bytes": 2474,
+      "original_source_sha256": "907413b9b4bb68b231f5d8185605044fbbfd3509e0496662301baaa004c805cc"
+    },
+    {
+      "file": "run-qemu-auth.sh",
+      "bytes": 1047,
+      "original_source_sha256": "d1907c7bb558b8e9882cf84e5f0ef3e9983c13440eb3b2e244280b5792e9d7b4"
+    },
+    {
+      "file": "verify-qemu-helper.py",
+      "bytes": 6134,
+      "original_source_sha256": "102ed16341a2526a4e0e597910e508184c303e6605b68af68556ac436d1fc7ee"
+    }
+  ]
+}

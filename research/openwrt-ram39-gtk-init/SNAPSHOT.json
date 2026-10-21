@@ -34,7 +34,136 @@
   "physical_MCU_CCMP_DMA_RF_emulated": false,
   "snapshot_kind": "Original RAM39 first-station GTK refresh sources; software verified",
   "source_files_byte_identical_to_frozen_workspace": true,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "original_personal_archive_sha256": "9389077729a0970d32b940e60f37e9a194a5e213d119aab195d6503f8735a22c",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "hardware_tested_at_issuance": false,
+  "hardware_result": {
+    "source": "Owner full async console; live status, clean stop/report and retained mgmt counters; no uploaded raw file or file SHA claimed",
+    "kernel": "6.12.113-c80-openwrt-ram39-gtk-init",
+    "helper_live_guard_corrected": true,
+    "first_WPA2_handshake_completed": true,
+    "first_GTK_refreshes": 1,
+    "first_GTK_PTK_authorized_BMC": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "key_adds_deletes_refused": [
+      3,
+      1,
+      0
+    ],
+    "EAPOL_TX_RX": [
+      2,
+      2
+    ],
+    "encrypted_TX_RX": [
+      7,
+      29
+    ],
+    "blocked_TX_RX": [
+      0,
+      0
+    ],
+    "replay_bad_crypto": [
+      0,
+      0
+    ],
+    "owner_disconnected_then_reconnect_failed": true,
+    "session_connections_disconnects": [
+      1,
+      0
+    ],
+    "session_auth_assoc_reassoc_deauth_disassoc": [
+      1,
+      1,
+      0,
+      0,
+      0
+    ],
+    "session_bad_before_after": [
+      34,
+      206
+    ],
+    "retained_mgmt_auth_assoc_reassoc_deauth_disassoc": [
+      1,
+      1,
+      0,
+      0,
+      0
+    ],
+    "retained_mgmt_headers": 14059,
+    "retained_mgmt_protected_ordered_fragments": [
+      0,
+      0
+    ],
+    "failure_RXD_flags_not_available": true,
+    "raw_beacons_precleanup_low16": 3915,
+    "precleanup_time_us": 769895594,
+    "initial_GTK_time_us": 369020018,
+    "AP_active_us": 400884464,
+    "AP_starts_stops": [
+      1,
+      1
+    ],
+    "peer_adds_deletes": [
+      1,
+      1
+    ],
+    "final_GTK_PTK_authorized_BMC": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "result_primary_cleanup_critical": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "DMA_idle_MCU_stopped": [
+      1,
+      1
+    ],
+    "inflight_token_fault": [
+      0,
+      0
+    ],
+    "total_MCU_TX_submitted_completed": [
+      72,
+      72
+    ],
+    "runtime_commands_submitted_completed_acked": [
+      41,
+      41,
+      41
+    ],
+    "runtime_data_submitted_headers_tokens_completed": [
+      9,
+      9,
+      9,
+      9
+    ],
+    "command_payload_reuses": 18,
+    "command_fault": 0,
+    "final_RX_delivered": 31,
+    "final_RX_ARP_IPv4": [
+      11,
+      18
+    ],
+    "scheduler_restored": true,
+    "pools_retained_until_reboot": 1,
+    "MemAvailable_KiB": 7744,
+    "fresh_boot_required": 1,
+    "power_cycle_required": 0,
+    "flash_writes": 0,
+    "physical_DHCP_lease_route_ping_TCP_unconfirmed": true,
+    "next_experiment": "RAM40 narrowly separates current-peer plaintext lifecycle management from encrypted data RX requirements; preserve hard-error checks and add RX gate telemetry. Specific hardware failure flags remain unknown."
+  },
+  "helper_guard_packaging_error": true,
+  "helper_guard_fix": "../ram39-helper-guard-fix/",
+  "next_experiment": "RAM40 RX metadata gate and bounded telemetry; failure flags unobserved"
 }

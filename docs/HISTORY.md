@@ -68,7 +68,7 @@
 
 | [openwrt-ram38-bmc-profile](../research/openwrt-ram38-bmc-profile/) | SSID виден,2ассоциации; GMK/GTKsetupfailed; stop чистый | 105 |
 
-| [openwrt-ram39-gtk-init](../research/openwrt-ram39-gtk-init/) | проверенный GTK refresh до PTK; программные проверки прошли, аппаратный тест ожидается | 108 |
+| [openwrt-ram39-gtk-init](../research/openwrt-ram39-gtk-init/) | первый физический WPA2 handshake; reconnect не прошёл; helper guard исправлен отдельно | 108 |
 
 ## Подтверждённый рубеж RAM31
 
@@ -183,3 +183,9 @@ refresh до PTK/авторизации через два подтверждён
 Одинаковый ключ не переустанавливается, активный PTK не заменяется. QEMU
 использует общую политику вместо прежнего accept-all stub.3753 native,
 23OEMARM,43QEMU/13startup-removal checks прошли. Физический тест ожидается.
+
+## RAM39: физический WPA2 и ошибка helper
+
+**Аппаратный результат RAM39:** после исправления ошибочного имени ядра в helper первый WPA2 handshake завершился: GTK refresh1, PTK/authorized1, EAPOL2/2, encryptedTX/RX7/29. После отключения клиента повторное подключение не прошло. Auth/assoc остались1/1, deauth/disassoc0, bad34→206; причины RXD-отбрасывания ещё не измерены. Остановка чистая: DMAidle/MCUstopped,72/72TX,41/41/41command, inflight0,MemAvailable7744KiB. Подтверждения DHCP-аренды, маршрута, ping и TCP ещё нет. Ошибка helper исправлена отдельно в [helper guard fix1](../research/ram39-helper-guard-fix/); исходный архив RAM39 не переписан.
+
+| [ram39-helper-guard-fix](../research/ram39-helper-guard-fix/) | точное имя ядра в helper; внешний CPIO;15QEMU checks; kernel unchanged | 6 |

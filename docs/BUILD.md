@@ -189,3 +189,7 @@ verify-gtk-refresh.sh исполняет текущий core и старый RAM
 Полный Linux patch32файла, ram38-to-ram39.patch,3753native/23OEMARM/43QEMU/
 13startup-removal checks и прежние7overrides. Локальные OEM/SSH inputs нужны
 для сборки. Копируйте4личныхpayloads, c80-start.txt последним, SSHreboot.
+
+## Helper guard fix1
+
+В исходном RAM39 helper ожидал неверный суффикс bmc-profile. Отдельный снимок ram39-helper-guard-fix исправляет guard через внешний 8KiB CPIO; только initrd-end меняется в DTB. Старый ZIP и ядро неизменны. Следующие сборки должны сравнивать ожидаемое имя helper с фактическим build/include/config/kernel.release и исполнять guard в QEMU с ограниченным version fixture до запуска MCU.

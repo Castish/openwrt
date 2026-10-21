@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: MIT
+/dts-v1/;
+/plugin/;
+/ { fragment@0 { target-path = "/chosen"; __overlay__ {
+    linux,initrd-start = <0x40d00000>;
+    linux,initrd-end = <0x40d02000>;
+}; }; };
