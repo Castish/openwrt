@@ -108,3 +108,25 @@ build-qemu.sh строит отдельный software-peer kernel; он не п
 сохраняется. Клиент переподключается до stop, AP start выполняется один раз.
 Счётчики живой сессии доступны в /sys/kernel/c80_wifi/session без run-mutex.
 Архив персональных образов и сырые тестовые логи в публичный Git не входят.
+
+## RAM34 WPA2-PSK/CCMP
+
+research/openwrt-ram34-wpa2/ содержит собственные исходники и полный31-файловый
+Linux6.12.113 патч. Добавлены c80_security_types/parse/core.h, c80_key_linux.h
+и c80_rsn.h. CPU mailbox cfg80211 передаёт операции в единственный MCU-поток;
+ACK и DDONE ограничивают повторное использование/очистку key DMA payload.
+Пакеты и668112-байтовый DMA pool прежние. Одинаковый ключ не переустанавливается.
+
+verify-all-native.sh строит/исполняет native suites; для protocol oracles нужны
+сохранённые proof JSON предыдущих этапов и локальная factory image для новых
+ARM трасс. Образы/JSON evidence остаются в личном рабочем архиве. Для QEMU
+verify-qemu-wpa2.py дополнительно нужен Python cryptography; он выполняет
+настоящий hostapd handshake при синтетическом key-install backend. C80_NET_SELFTEST
+выключен в физическом ядре. Старые Linux/runtime/toolchain prerequisites
+сохраняются. Новая rootfs конфигурация находится в overrides/.
+
+Развёртывание в тестовой среде: четыре личных TFTP-файла, c80-start.txt последним,
+обычный reboot через LAN1 SSH. U-Boot не перепрограммируется. Wi-Fi тестовый
+пароль openwrt123, root-пароль прежний; серверные ключи не меняются. На плате
+нужен первый WPA2/DHCP/ping/reconnect/stop тест. Не используйте QEMU kernel
+на роутере и не публикуйте персональные CPIO/ключи/OEM firmware.

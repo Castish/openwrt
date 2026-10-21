@@ -1,0 +1,23 @@
+{
+  "snapshot_kind": "Original RAM34 source exported after software verification",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "hardware_tested": false,
+  "native_ASan_UBSan_cases": 3576,
+  "new_security_cases": 101,
+  "OEM_ARM_security_builder_cases": 13,
+  "QEMU_real_hostapd_WPA2_cases": 31,
+  "QEMU_real_Linux_protocol_cases": 13,
+  "QEMU_pinned_SSH_password_cases": 1,
+  "QEMU_memory_available_KiB": 6456,
+  "QEMU_synthetic_key_install_backend": true,
+  "physical_MCU_CCMP_DMA_RF_emulated": false,
+  "source_patch_files": 31,
+  "source_entries_restored": 86728,
+  "rootfs_entries_restored": 600,
+  "WPA2_PSK_CCMP_driver_path_implemented": true,
+  "AP_restart_same_boot_implemented": false,
+  "GTK_rekey_implemented": false,
+  "PMF_implemented": false,
+  "original_personal_archive_sha256": "9dfb2142b640e7b07498923032e6093063ccf3178af630bf671f119aac7fdcd4",
+  "private_keys_and_OEM_firmware_images_included": false
+}

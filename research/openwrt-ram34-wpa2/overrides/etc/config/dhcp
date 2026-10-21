@@ -1,0 +1,21 @@
+config dnsmasq
+        option port '0'
+        option authoritative '1'
+        option no_ping '1'
+        option leasefile '/tmp/dhcp.leases'
+        option nonwildcard '1'
+        option localservice '1'
+        option logdhcp '1'
+
+config dhcp 'lan'
+        option interface 'lan'
+        option ignore '1'
+
+config dhcp 'wifi_ram'
+        option interface 'wifi_ram'
+        option start '2'
+        option limit '1'
+        option leasetime '2m'
+        option force '1'
+        list dhcp_option '3'
+        list dhcp_option '6'

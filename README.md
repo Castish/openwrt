@@ -21,12 +21,15 @@ DMA/MCU прошли. [Результат аппаратного теста](res
 одного клиента, включая 7 повторных, при одном запуске AP. Обе показанные серии
 ping прошли без потерь, остановка DMA/MCU завершилась без ошибок.
 [Результат проверки](research/openwrt-ram33-reconnect/VALIDATION.md).
-Далее — шифрование WPA2 и дальнейшая интеграция со штатным управлением Wi-Fi.
+Подготовлена [RAM34](research/openwrt-ram34-wpa2/) с WPA2-PSK/CCMP через
+штатный hostapd. Программные проверки и рукопожатие в QEMU прошли; физический
+WPA2-тест ещё ожидается. Это не подтверждённый аппаратный WPA2-порт.
 
 - [История этапов и результаты](docs/HISTORY.md)
 - [Структура и сборка](docs/BUILD.md)
 - [Состав публикации и приватные файлы](docs/PUBLICATION.md)
-- [Каталог58 исходных снимков](docs/source-catalog.json)
+- [Каталог59 исходных снимков](docs/source-catalog.json)
+- [Исходники RAM34 с WPA2-PSK/CCMP](research/openwrt-ram34-wpa2/)
 - [Исходники RAM33 с повторным подключением](research/openwrt-ram33-reconnect/)
 - [Исходники проверенной RAM32](research/openwrt-ram32-cfg80211/)
 - [Длительный тест транспорта RAM31](research/openwrt-ram31-scheduler/)
