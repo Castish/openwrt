@@ -1,7 +1,7 @@
 {
   "snapshot_kind": "Original RAM34 source exported after software verification",
   "source_files_byte_identical_to_frozen_workspace": true,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "native_ASan_UBSan_cases": 3576,
   "new_security_cases": 101,
   "OEM_ARM_security_builder_cases": 13,
@@ -19,5 +19,18 @@
   "GTK_rekey_implemented": false,
   "PMF_implemented": false,
   "original_personal_archive_sha256": "9dfb2142b640e7b07498923032e6093063ccf3178af630bf671f119aac7fdcd4",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "hardware_result": "startup_stopped_before_client_connection",
+  "SSID_visible": false,
+  "AP_starts": 1,
+  "AP_stops": 1,
+  "key_adds": 1,
+  "MCU_commands_submitted_completed_acked": [
+    32,
+    32,
+    32
+  ],
+  "command_fault": 0,
+  "client_connections": 0,
+  "physical_WPA2_handshake_or_CCMP_confirmed": false
 }

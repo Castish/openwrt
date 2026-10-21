@@ -1,0 +1,18 @@
+{
+  "snapshot_kind": "Original RAM35 startup helper fix; software verified",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "hardware_tested": false,
+  "C_header_assembly_inputs_unchanged": 32,
+  "Linux_patch_unchanged": true,
+  "inherited_native_cases": 3576,
+  "native_cases_rerun": false,
+  "inherited_OEM_ARM_builder_cases": 13,
+  "new_QEMU_WPA2_checks": 36,
+  "new_QEMU_startup_removal_checks": 13,
+  "real_Linux_protocol_cases": 13,
+  "QEMU_key_install_backend_synthetic": true,
+  "physical_MCU_CCMP_DMA_RF_emulated": false,
+  "QEMU_memory_available_KiB": 6396,
+  "original_personal_archive_sha256": "fb90b1a5d728583d31e10f4a1581dfc472d6b6649dd54d2e297f23f22f6dc7b0",
+  "private_keys_and_OEM_firmware_images_included": false
+}

@@ -130,3 +130,16 @@ verify-qemu-wpa2.py дополнительно нужен Python cryptography; �
 пароль openwrt123, root-пароль прежний; серверные ключи не меняются. На плате
 нужен первый WPA2/DHCP/ping/reconnect/stop тест. Не используйте QEMU kernel
 на роутере и не публикуйте персональные CPIO/ключи/OEM firmware.
+
+## RAM35 startup helper
+
+research/openwrt-ram35-netup/ сохраняет Linux/C/ASM и пакеты RAM34. Добавлена
+библиотека c80_wifi_lifecycle.sh (в rootfs usr/libexec/), которую одинаково
+исполняют helper и QEMU regression. Она поднимает wireless netdev до AP,
+вызывает прямой ubus interface up без общего reload и проверяет состояние.
+rootfs diff — ram34-to-ram35-rootfs.patch, полный Linux-патч прежний31 файл.
+Свежие verify-qemu-wpa2.py и verify-qemu-startup-removal.py проходят36 и13
+проверок соответственно.32 native inputs совпадают с исходниками проверенных
+3576 cases RAM34. Для новой сборки нужны все7 overrides, включая библиотеку.
+TFTP deployment прежний,SSID C80-RAM35/PSKopenwrt123. Нового U-Boot/NOR write
+не требуется. Персональная SSH идентичность и root-пароль сохраняются.

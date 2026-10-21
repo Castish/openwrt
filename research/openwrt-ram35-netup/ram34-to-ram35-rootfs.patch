@@ -1,0 +1,83 @@
+--- /dev/null
++++ b/usr/libexec/c80-wifi-lifecycle.sh
+@@ -0,0 +1,30 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0-only
++# Shared by the router helper and real OpenWrt/QEMU lifecycle regression.
++c80_wifi_network_prepare() {
++    c80_prepare_state=$(cat "$1") || return 1
++    case " $c80_prepare_state " in *' active=0 '*) ;; *) echo 'Network preparation must precede AP start.';return 1;; esac
++    case " $c80_prepare_state " in *' finished=0 '*) ;; *) echo 'AP test has finished; reboot before preparing again.';return 1;; esac
++    ubus -t 10 wait_for network.interface.wifi_ram || return 1
++    # netifd treats wireless netdevs as external devices and leaves them
++    # unavailable while IFF_UP is clear. Raise the netdev before START_AP;
++    # this does not start a beacon or reload any network configuration.
++    ifconfig c80wlan0 up || return 1
++    ubus call network.interface.wifi_ram add_device '{"name":"c80wlan0"}' || return 1
++    ubus call network.interface.wifi_ram up || return 1
++    c80_net_wait=0
++    while [ "$c80_net_wait" -lt 10 ]; do
++        c80_net_state=$(ubus call network.interface.wifi_ram status) || return 1
++        c80_net_up=$(printf '%s\n' "$c80_net_state" | jsonfilter -e '@.up')
++        [ "$c80_net_up" = true ] && return 0
++        sleep 1
++        c80_net_wait=$((c80_net_wait+1))
++    done
++    echo 'Wi-Fi interface did not come up in netifd.'
++    return 1
++}
++c80_wifi_assert_active() {
++    c80_ap_state=$(cat "$1") || return 1
++    case " $c80_ap_state " in *' active=1 '*) ;; *) echo 'AP is no longer active; collect c80-wifi report.';return 1;; esac
++    case " $c80_ap_state " in *' finished=0 '*) return 0;; *) echo 'AP test has finished; collect c80-wifi report.';return 1;; esac
++}
+--- a/etc/c80-hostapd.conf
++++ b/etc/c80-hostapd.conf
+@@ -14,7 +14,7 @@
+ logger_stdout_level=2
+ interface=c80wlan0
+ ctrl_interface=/var/run/c80-hostapd
+-ssid=C80-RAM34
++ssid=C80-RAM35
+ dtim_period=1
+ wmm_enabled=0
+ auth_algs=1
+--- a/usr/sbin/c80-wifi
++++ b/usr/sbin/c80-wifi
+@@ -1,7 +1,8 @@
+ #!/bin/sh
++. /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+ case "${1:-}" in
+ start)
+-    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram34-wpa2' ] || { echo 'Requires the RAM34 cfg80211 router kernel.';exit 1; }
++    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram35-netup' ] || { echo 'Requires the RAM35 cfg80211 router kernel.';exit 1; }
+     mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+     /etc/init.d/dnsmasq start
+     ( echo 1 > /sys/kernel/c80_wifi/run
+@@ -23,6 +24,7 @@
+         sleep 1;n=$((n+1))
+     done
+     if [ "$n" -eq 45 ]; then echo 1 > /sys/kernel/c80_wifi/stop;echo 'Preparation timed out; wait for Finished and collect report.';exit 1;fi
++    c80_wifi_network_prepare /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;echo 'Network setup failed; collect report.';exit 1; }
+     /etc/init.d/c80-hostapd start || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+     ubus -t 10 wait_for hostapd || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+     # Let netifd's initial empty configuration settle before adding this test AP.
+@@ -41,12 +43,12 @@
+         sleep 1;n=$((n+1))
+     done
+     if [ "$n" -eq 12 ];then echo 1 > /sys/kernel/c80_wifi/stop;echo 'hostapd setup timed out; collect report.';exit 1;fi
+-    # Attach this dynamically created AP explicitly to netifd. Wireless
+-    # devices can remain NO_DEVICE until their controlling service does this.
+-    ubus call network.interface.wifi_ram add_device '{"name":"c80wlan0"}' || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    ifup wifi_ram || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    /etc/init.d/dnsmasq restart
+-    echo 'hostapd started C80-RAM34 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
++    /etc/init.d/dnsmasq restart || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
++    # Observe state again after DHCP setup; an earlier START_AP ACK is not
++    # evidence that a later network operation kept the AP running.
++    sleep 1
++    c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
++    echo 'hostapd started C80-RAM35 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+     ;;
+ stop)
+     echo 1 > /sys/kernel/c80_wifi/stop || exit 1

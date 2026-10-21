@@ -66,6 +66,8 @@
 
 | [openwrt-ram34-wpa2](../research/openwrt-ram34-wpa2/) | WPA2-PSK/CCMP через hostapd; программные проверки прошли, аппаратный тест ожидается | 89 |
 
+| [openwrt-ram35-netup](../research/openwrt-ram35-netup/) | настройка netifd до AP, проверка состояния после DHCP; аппаратный тест ожидается | 92 |
+
 ## Подтверждённый рубеж RAM31
 
 Одно открытое подключение клиента:5126 парных завершений TX,5110 reuse payload,40 оборотов кольца, полный оборот4080 data token IDs. Ошибок ownership/stale/duplicate/early-token не зафиксировано. Штатная остановка: result/cleanup/critical=0; DMA idle и MCU stopped подтверждены; память остаётся закреплена до reboot.
@@ -103,3 +105,17 @@ MCU stopped. [Подробности](../research/openwrt-ram33-reconnect/VALIDA
 подключение. Пройдены3576 native,13 OEM ARM,31 QEMU и13 Linux-протокольных
 проверок. Подтверждение установки ключа в QEMU синтетическое; физические
 CCMP/MCU/RF и подключение клиента RAM34 ещё не проверены.
+
+## RAM34: обнаруженная остановка AP; исправление RAM35
+
+Владелец не увидел SSID RAM34. AP-ENABLED сменился пустой конфигурацией phy0
+и AP-DISABLED через секунду: post-AP ifup в helper выполняет network reload и
+down/up. Статус finished/result0, один start/stop,0 клиентов/EAPOL, GTK install
+и32 ACK MCU-команд подтверждены. Это не подтверждает CCMP или соединение.
+
+RAM35 настраивает netdev/netifd до AP без ifup/network reload, после DHCP
+проверяет active/finished.36 новых QEMU WPA2/lifecycle проверок и13 проверок
+инъекции пустой конфигурации прошли. Реальный аппаратный тайминг ifup QEMU
+не воспроизвёл; эта граница проверки указана явно. Драйверные исходники и
+полный Linux-патч прежние;3576 native и13 ARM cases унаследованы по хешам,
+не перезапускались. Новый аппаратный тест RAM35 ожидается.

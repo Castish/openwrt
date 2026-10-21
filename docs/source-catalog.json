@@ -353,6 +353,12 @@
       "source_files": 89,
       "source_bytes": 1123925,
       "snapshot_path": "research/openwrt-ram34-wpa2"
+    },
+    {
+      "stage": "openwrt-ram35-netup",
+      "source_files": 92,
+      "source_bytes": 1072606,
+      "snapshot_path": "research/openwrt-ram35-netup"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

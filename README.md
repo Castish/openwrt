@@ -22,13 +22,16 @@ DMA/MCU прошли. [Результат аппаратного теста](res
 ping прошли без потерь, остановка DMA/MCU завершилась без ошибок.
 [Результат проверки](research/openwrt-ram33-reconnect/VALIDATION.md).
 Подготовлена [RAM34](research/openwrt-ram34-wpa2/) с WPA2-PSK/CCMP через
-штатный hostapd. Программные проверки и рукопожатие в QEMU прошли; физический
-WPA2-тест ещё ожидается. Это не подтверждённый аппаратный WPA2-порт.
+штатный hostapd. На плате AP удалилась при последующей настройке сети ещё до
+подключения клиента. [RAM35](research/openwrt-ram35-netup/) исправляет порядок
+запуска и проверяет состояние AP после DHCP; программные проверки прошли,
+аппаратный тест новой версии ожидается. Физический WPA2 пока не подтверждён.
 
 - [История этапов и результаты](docs/HISTORY.md)
 - [Структура и сборка](docs/BUILD.md)
 - [Состав публикации и приватные файлы](docs/PUBLICATION.md)
-- [Каталог59 исходных снимков](docs/source-catalog.json)
+- [Каталог60 исходных снимков](docs/source-catalog.json)
+- [Исходники RAM35 с исправленным запуском AP](research/openwrt-ram35-netup/)
 - [Исходники RAM34 с WPA2-PSK/CCMP](research/openwrt-ram34-wpa2/)
 - [Исходники RAM33 с повторным подключением](research/openwrt-ram33-reconnect/)
 - [Исходники проверенной RAM32](research/openwrt-ram32-cfg80211/)
