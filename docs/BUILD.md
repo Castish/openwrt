@@ -143,3 +143,15 @@ rootfs diff — ram34-to-ram35-rootfs.patch, полный Linux-патч пре�
 3576 cases RAM34. Для новой сборки нужны все7 overrides, включая библиотеку.
 TFTP deployment прежний,SSID C80-RAM35/PSKopenwrt123. Нового U-Boot/NOR write
 не требуется. Персональная SSH идентичность и root-пароль сохраняются.
+
+## RAM36 beacon/key snapshots
+
+research/openwrt-ram36-beacon-diag/ добавляет c80-wifi diag и saved CPU snapshots.
+Скопируйте семь templates из overrides/ в rootfs. Персональный SSH overlay,
+OEM blobs и Linux archive подключаются локально. verify-all-native.sh включает
+48 новых beacon-diag cases и summarize-native.py. QEMU-only report-lock test
+собран в c80_mcu_transport.c и вызывается до /init; физическое ядро его не имеет.
+Полный31-файловый Linux patch и ram35-to-ram36.patch фиксируют исходные изменения.
+Не запускайте mutating build/package scripts поверх выданного frozen ZIP.
+TFTP deployment прежний: четыре payload-файла, c80-start.txt последним, reboot.
+Проверка: start, diag, поиск C80-RAM36, stop, Finished, diag и report.

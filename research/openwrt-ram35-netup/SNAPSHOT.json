@@ -1,7 +1,7 @@
 {
   "snapshot_kind": "Original RAM35 startup helper fix; software verified",
   "source_files_byte_identical_to_frozen_workspace": true,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "C_header_assembly_inputs_unchanged": 32,
   "Linux_patch_unchanged": true,
   "inherited_native_cases": 3576,
@@ -14,5 +14,26 @@
   "physical_MCU_CCMP_DMA_RF_emulated": false,
   "QEMU_memory_available_KiB": 6396,
   "original_personal_archive_sha256": "fb90b1a5d728583d31e10f4a1581dfc472d6b6649dd54d2e297f23f22f6dc7b0",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "startup_lifecycle_fix_observed": true,
+  "SSID_visible": false,
+  "hardware_result": "AP_active_but_SSID_not_found; clean_explicit_stop",
+  "AP_starts": 1,
+  "AP_stops": 1,
+  "MCU_commands_submitted_completed_acked": [
+    32,
+    32,
+    32
+  ],
+  "command_fault": 0,
+  "AP_active_us": 468994454,
+  "TSF_delta_us": 469062196,
+  "RX0_raw_frames": 14526,
+  "RX0_beacon_header_candidates": 12636,
+  "client_connections": 0,
+  "physical_WPA2_handshake_or_CCMP_confirmed": false,
+  "legacy_live_report_waited_for_run_mutex": true,
+  "second_SSH_stop_recovery_confirmed": true,
+  "cleanup_errors": 0,
+  "critical_errors": 0
 }

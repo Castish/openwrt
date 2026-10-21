@@ -1,0 +1,18 @@
+{
+  "native_cases": 3624,
+  "new_beacon_diag_native_cases": 48,
+  "OEM_ARM_builder_cases": 13,
+  "QEMU_WPA2_checks": 37,
+  "actual_ARM_report_callback_cases": 32,
+  "QEMU_startup_removal_checks": 13,
+  "QEMU_real_Linux_protocol_cases": 13,
+  "QEMU_memory_available_KiB": 6352,
+  "DMA_pool_bytes": 668112,
+  "SSID_visibility_fix_claimed": false,
+  "physical_MCU_CCMP_DMA_RF_emulated": false,
+  "snapshot_kind": "Original RAM36 beacon/key diagnostic sources; software verified",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "hardware_tested": false,
+  "original_personal_archive_sha256": "35ddfecec613b423cc921cd5a3bc4c7428dead150184621f15a77372fea4b146",
+  "private_keys_and_OEM_firmware_images_included": false
+}
