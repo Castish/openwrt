@@ -15,7 +15,75 @@
   "physical_MCU_CCMP_DMA_RF_emulated": false,
   "snapshot_kind": "Original RAM37 channel1 experiment sources; software verified",
   "source_files_byte_identical_to_frozen_workspace": true,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "original_personal_archive_sha256": "d2b670ae43d5090368800280eab3e1e362869ffb2af91189b207ca6f1e6b7f59",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "hardware_tested_at_issuance": false,
+  "hardware_result": {
+    "SSID_visible_owner_reported": false,
+    "kernel": "6.12.113-c80-openwrt-ram37-channel1",
+    "channel": 1,
+    "frequency_MHz": 2412,
+    "snapshots_us": [
+      161340086,
+      161350049,
+      161360018,
+      408260096
+    ],
+    "snapshot_guards": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "snapshot_beacon_raw_low16": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "post_GTK_to_precleanup_us": 246900078,
+    "GTK_BMC_live_at_precleanup": true,
+    "AP_active_us": 246915025,
+    "AP_starts_stops": [
+      1,
+      1
+    ],
+    "result_primary_cleanup_critical": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "MCU_commands_submitted_completed_acked": [
+      32,
+      32,
+      32
+    ],
+    "command_payload_reuses": 9,
+    "command_fault": 0,
+    "total_TX_submitted_completed": [
+      63,
+      63
+    ],
+    "total_RX_packets": 15817,
+    "DMA_idle": 1,
+    "MCU_stopped": 1,
+    "pools_retained": 0,
+    "scheduler_restored": 1,
+    "client_connections": 0,
+    "EAPOL_TX_RX": [
+      0,
+      0
+    ],
+    "encrypted_TX_RX": [
+      0,
+      0
+    ],
+    "MemAvailable_KiB": 8184,
+    "flash_writes": 0,
+    "fresh_boot_required": 1,
+    "power_cycle_required": 0
+  },
+  "next_experiment": "RAM38 normal BMC mask0x2101, tag8,252-byte create; channel1 retained; RF cause unproven"
 }

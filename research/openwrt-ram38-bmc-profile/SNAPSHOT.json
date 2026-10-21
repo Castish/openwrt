@@ -1,0 +1,32 @@
+{
+  "native_cases": 3712,
+  "new_BMC_profile_native_cases": 12,
+  "retained_channel_native_cases": 76,
+  "OEM_ARM_builder_cases": 23,
+  "OEM_ARM_normal_BMC_cases": 4,
+  "OEM_ARM_channel_cases": 6,
+  "QEMU_WPA2_checks": 40,
+  "actual_ARM_report_callback_cases": 32,
+  "QEMU_startup_removal_checks": 13,
+  "QEMU_real_Linux_protocol_cases": 13,
+  "QEMU_memory_available_KiB": 6496,
+  "DMA_pool_bytes": 668112,
+  "hostapd_and_nl80211_channel": 1,
+  "frequency_MHz": 2412,
+  "BMC_create_body_bytes": 252,
+  "BMC_create_TLV_tags": [
+    0,
+    8,
+    13
+  ],
+  "BMC_TLV8_flags": 1,
+  "BMC_delete_body_bytes": 28,
+  "BMC_order_unchanged": true,
+  "SSID_visibility_fix_claimed": false,
+  "physical_MCU_CCMP_DMA_RF_emulated": false,
+  "snapshot_kind": "Original RAM38 BMC normal-profile conformance trial sources; software verified",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "hardware_tested": false,
+  "original_personal_archive_sha256": "5642cf907919d5cede3bb3d55fea6a1e0cfde45031af804cb26dbbbf676da37c",
+  "private_keys_and_OEM_firmware_images_included": false
+}

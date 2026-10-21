@@ -165,3 +165,16 @@ TFTP deployment прежний: четыре payload-файла, c80-start.txt �
 19 OEM ARM cases связаны с конкретными исходниками и kernel artifacts.
 Публичные overrides/ заменяют только локальные templates; OEM/SSH inputs
 по-прежнему нужны локально. Выданный ZIP не пересобирается поверх выпуска.
+
+## RAM38: BMC normal AP profile
+
+research/openwrt-ram38-bmc-profile/ изменяет только BMC create в shared core:
+252байта, TLVs0/8/13, tag8flags1; delete28/peer244/key52 и порядок прежние.
+trace-normal-ap-request.py и trace-bmc-profile.py исполняют OEM ARM constructor
+и builder с локальной factory image. Собственные native tests проверяют OEM
+байтовый oracle, guard pages252/28 и MCU failures; все3712cases выполнены.
+Полный Linux patch32файла, ram37-to-ram38.patch и7rootfs overrides включены.
+Профиль канала1 сохраняется.23OEM ARM/40QEMU/13startup-removal проверены,
+но физические CCMP/DMA/MCU/RF в этих тестах не эмулируются.
+Копируйте4новых личных TFTP payload, manifest последним, обычный SSH reboot.
+Нового U-Boot/NOR write нет. Персональные CPIO/ключи/OEM inputs остаются локально.
