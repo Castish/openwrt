@@ -395,6 +395,12 @@
       "source_files": 108,
       "source_bytes": 1161434,
       "snapshot_path": "research/openwrt-ram40-rx-status"
+    },
+    {
+      "stage": "ram40-wpa2-load-test",
+      "source_files": 3,
+      "source_bytes": 20157,
+      "snapshot_path": "research/ram40-wpa2-load-test"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

@@ -1,0 +1,29 @@
+{
+  "Passed": true,
+  "CasesPassed": 16,
+  "Cases": [
+    "success",
+    "wrong-source",
+    "missing-route",
+    "route-change",
+    "ten-losses",
+    "wrong-payload",
+    "short-payload",
+    "wrong-address",
+    "exception",
+    "isolated-loss",
+    "deadline",
+    "large-losses",
+    "keep-losses",
+    "tcp-refused",
+    "tcp-wrong-source",
+    "actual-PowerShell-parser"
+  ],
+  "Runtime": "7.5.4",
+  "WindowsPowerShell51Executed": false,
+  "ProductionScriptSha256": "3dd4608bd82447640617a3248149e21396cdb25a11e8e89a60381a8083a788a1",
+  "VerifierSha256": "05c294552edeb07ceb9481a6ffe77c616026e312615a80d01a300ba951b85d43",
+  "ActualDotnetLoopbackCasesPassed": 0,
+  "ActualDotnetLoopbackUnavailable": "Linux host has no system ping utility required by the .NET implementation.",
+  "PhysicalRouterOrRFEmulated": false
+}

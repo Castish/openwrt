@@ -14,8 +14,17 @@ inflight0, MemAvailable7760KiB. В этом первом отчёте ping не 
 через тот же Wi-Fi. Это подтверждает IP и доступность TCP-службы; сама
 авторизация SSH этими командами не проверялась. Отключение клиента между
 этими двумя сериями не указано; два WPA2-переподключения подтверждены
-предыдущим отдельным отчётом. Следующий тест — крупные пакеты и длительная
-нагрузка по WPA2 на той же сборке.
+предыдущим отдельным отчётом.
+
+Следующая проверка крупных пакетов также прошла: 10/10 DF ping с нагрузкой
+1372 байта без потерь, MTU 1400, RTT 19–38 мс, среднее 24 мс.
+Скорость передачи AP пока фиксирована на CCK1 (1 Мбит/с), обработчик
+опрашивает DMA с usleep_range(1000,1050), а точные таймеры выключены
+при HZ=100. Это объясняет вероятные источники задержки; вклад каждого
+этапа аппаратно не измерен. Следующий тест — длительная нагрузка WPA2
+на той же работающей AP: [сценарий Windows](../ram40-wpa2-load-test/).
+Образы ядра и драйвер не изменены.
+
 
 
 3871 fresh native ASan/UBSan cases (3753 retained,118 new RX gate), actual RX0/parser/session/key worker and synthetic descriptor/MCU effects. Original RAM39 gate reproduces refusal for synthetic current-peer plaintext auth with CCMP WCID/CipherMis. The original failed RAM39 frames were not captured. RAM40 now physically records an unprotected deauth with CCMP/CipherMis that the previous gate would reject, and three completed WPA2 handshakes in one AP run.
@@ -24,4 +33,4 @@ inflight0, MemAvailable7760KiB. В этом первом отчёте ping не 
 
 Full32-file patch and86729source entries restored without fuzz/offset. Rootfs601host/607CPIO/recovery3/45unchanged signed packages/66ELF, actual ARM decompressor6/handoff5/restart8 and RAM layout pass. DMApool668112B unchanged. Parent23OEMARM traces are inherited by byte-identical key/BMC/channel constructors, not rerun.
 
-No firmware flash/UBoot update required. Physical WPA2 reconnect and clean shutdown are confirmed for one owner run. A later owner check confirms40/40pings andTCP22 twice via the physical Wi-Fi route. Interactive SSH authentication, DHCP lease table, large packets and sustained encrypted load were not separately collected. Raw logs/private server keys/OEM blobs are never published. Source-manifest binds every exported original source to its frozen personal release.
+No firmware flash/UBoot update required. Physical WPA2 reconnect and clean shutdown are confirmed for one owner run. A later owner check confirms40/40pings andTCP22 twice via the physical Wi-Fi route. Interactive SSH authentication and DHCP lease table were not separately collected. Large DF packets later passed10/10; sustained encrypted load remains pending. Raw logs/private server keys/OEM blobs are never published. Source-manifest binds every exported original source to its frozen personal release.

@@ -241,7 +241,7 @@
     "next_check": "Same RAM40 normal reboot/start and one Wi-Fi client; confirm physical interface route, DHCP address, ping then TCP; no new image required",
     "raw_logs_addresses_keys_not_published": true
   },
-  "next_check": "Same running RAM40; large DF packets and sustained WPA2 load",
+  "next_check": "Same running RAM40 WPA2 AP; Windows sustained load script, then clean stop and report",
   "physical_IP_followup": {
     "source": "Owner inline PowerShell output; no uploaded raw file or source-file hash claimed",
     "stage_context": "RAM40 following requested same-image reboot/start and Wi-Fi IP check",
@@ -295,5 +295,50 @@
     "new_image_or_flash_write_required": false,
     "next_validation": "Same running RAM40; MTU1400 with1472-excluded/1372payload DF ping and sustained WPA2 descriptor/token/PN reuse; no repeated basic route/20ping required"
   },
-  "latest_hardware_status": "Physical WPA2 reconnect and Wi-Fi IP/TCP22 confirmed in separate owner reports"
+  "latest_hardware_status": "WPA2 reconnect,40/40 small pings,TCP22 twice and10/10 MTU1400 DF pings confirmed; sustained WPA2 load pending",
+  "physical_MTU_followup": {
+    "source": "Owner inline Windows PowerShell output; no uploaded file or source-file hash claimed",
+    "stage_context": "Continuing the running RAM40 WPA2 connection after physical Wi-Fi route/IP/TCP checks",
+    "kernel_uname_not_in_this_Windows_output": true,
+    "destination": "192.168.2.1",
+    "command": "ping -n 10 -w 1000 -f -l 1372 192.168.2.1",
+    "sent": 10,
+    "received": 10,
+    "lost": 0,
+    "TTL": 64,
+    "ICMP_payload_bytes": 1372,
+    "IPv4_MTU_bytes": 1400,
+    "DF": true,
+    "reported_RTT_ms_min": 19,
+    "reported_RTT_ms_max": 38,
+    "reported_RTT_ms_average": 24,
+    "sample_RTT_ms": [
+      19,
+      23,
+      37,
+      21,
+      24,
+      20,
+      20,
+      19,
+      28,
+      38
+    ],
+    "route_not_rechecked_in_this_command": true,
+    "previous_Windows_routes_selected_physical_WiFi_source_192_168_2_2": true,
+    "no_new_kernel_or_router_report_in_this_output": true,
+    "sustained_WPA2_load_pending": true,
+    "current_AP_left_running_requested": true,
+    "new_image_or_flash_write_required": false
+  },
+  "latency_source_inspection": {
+    "AP_TX_fixed_rate_Mbps": 1,
+    "client_TX_rate_measured": false,
+    "runtime_DMA_poll_requested_delay_us": 1000,
+    "Linux_delay_callback": "usleep_range(us,us+50)",
+    "CONFIG_HZ": 100,
+    "CONFIG_HIGH_RES_TIMERS": false,
+    "per_stage_latency_contribution_physically_measured": false,
+    "firmware_performance_changes_made": false
+  }
 }

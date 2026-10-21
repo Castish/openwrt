@@ -1,0 +1,20 @@
+{
+  "source_snapshot": "ram40-wpa2-load-test",
+  "files": [
+    {
+      "file": "c80-wifi-load.ps1",
+      "bytes": 8121,
+      "original_source_sha256": "3dd4608bd82447640617a3248149e21396cdb25a11e8e89a60381a8083a788a1"
+    },
+    {
+      "file": "verify-load-test.ps1",
+      "bytes": 9759,
+      "original_source_sha256": "05c294552edeb07ceb9481a6ffe77c616026e312615a80d01a300ba951b85d43"
+    },
+    {
+      "file": "package.py",
+      "bytes": 2277,
+      "original_source_sha256": "86ab15f9c1e656b3146a0b3f8370695b87a3f760a998c92a90da411491112854"
+    }
+  ]
+}
