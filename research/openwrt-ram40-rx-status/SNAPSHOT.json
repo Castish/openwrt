@@ -241,5 +241,59 @@
     "next_check": "Same RAM40 normal reboot/start and one Wi-Fi client; confirm physical interface route, DHCP address, ping then TCP; no new image required",
     "raw_logs_addresses_keys_not_published": true
   },
-  "next_check": "Same RAM40 image; physical Wi-Fi route/DHCP/ping/TCP, ping not performed yet"
+  "next_check": "Same running RAM40; large DF packets and sustained WPA2 load",
+  "physical_IP_followup": {
+    "source": "Owner inline PowerShell output; no uploaded raw file or source-file hash claimed",
+    "stage_context": "RAM40 following requested same-image reboot/start and Wi-Fi IP check",
+    "kernel_uname_not_in_this_Windows_output": true,
+    "destination": "192.168.2.1",
+    "source_address": "192.168.2.2",
+    "interface_alias": "Беспроводная сеть",
+    "route_selected_physical_WiFi_in_both_batches": true,
+    "ping_batches": [
+      {
+        "sent": 20,
+        "received": 20,
+        "lost": 0,
+        "payload_bytes": 32,
+        "timeout_ms": 1000,
+        "TTL": 64,
+        "reported_RTT_ms_min": 4,
+        "reported_RTT_ms_max": 19,
+        "reported_RTT_ms_average": 10
+      },
+      {
+        "sent": 20,
+        "received": 20,
+        "lost": 0,
+        "payload_bytes": 32,
+        "timeout_ms": 1000,
+        "TTL": 64,
+        "reported_RTT_ms_min": 4,
+        "reported_RTT_ms_max": 22,
+        "reported_RTT_ms_average": 10
+      }
+    ],
+    "total_sent": 40,
+    "total_received": 40,
+    "total_lost": 0,
+    "TCP_port": 22,
+    "TCP_tests_succeeded": [
+      true,
+      true
+    ],
+    "TCP_source_interface_confirmed_WiFi": true,
+    "interactive_SSH_login_over_WiFi_not_exercised_by_TestNetConnection": true,
+    "disconnect_between_these_two_batches_not_stated": true,
+    "DHCP_lease_table_not_collected": true,
+    "large_packets_and_sustained_WPA2_load_not_yet_tested": true,
+    "earlier_physical_reconnect_evidence": "hardware-wpa2-reconnect-1/result.json",
+    "previous_AP_starts": 1,
+    "previous_completed_WPA2_handshakes": 3,
+    "previous_reconnects": 2,
+    "current_AP_left_running_requested": true,
+    "new_image_or_flash_write_required": false,
+    "next_validation": "Same running RAM40; MTU1400 with1472-excluded/1372payload DF ping and sustained WPA2 descriptor/token/PN reuse; no repeated basic route/20ping required"
+  },
+  "latest_hardware_status": "Physical WPA2 reconnect and Wi-Fi IP/TCP22 confirmed in separate owner reports"
 }
