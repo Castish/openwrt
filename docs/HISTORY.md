@@ -192,4 +192,15 @@ refresh до PTK/авторизации через два подтверждён
 
 ## RAM40: current-peer plaintext management RX gate
 
-[RAM40](../research/openwrt-ram40-rx-status/) сохраняет первый GTK refresh, channel1 и ключевую политику RAM39. При живом PTK допускает обычные lifecycle management кадры того же peer с CCMP WCID/CipherMis, сохраняя проверки ошибок/RSN/данных. В report добавлены RX gate причины.3871native/48QEMU/13startup-removal checks пройдены. Конкретные аппаратные RXD-флаги RAM39 и результат RAM40 пока неизвестны. Экспортировано 108 исходных файлов.
+[RAM40](../research/openwrt-ram40-rx-status/) сохраняет первый GTK refresh, channel1 и ключевую политику RAM39. При живом PTK допускает обычные lifecycle management кадры того же peer с CCMP WCID/CipherMis, сохраняя проверки ошибок/RSN/данных. В report добавлены RX gate причины.3871native/48QEMU/13startup-removal checks пройдены. Исходные RXD-флаги неудачи RAM39 не сохранены. На RAM40 уже подтверждены три физических WPA2-handshake и два повторных подключения одного клиента; приняты три deauth с CCMP/CipherMis. Остановка чистая. Ping ещё не выполнялся. Экспортировано 108 исходных файлов.
+
+### Аппаратный результат RAM40
+
+**Аппаратная проверка RAM40 пройдена для WPA2-переподключения:** один клиент
+трижды завершил WPA2 handshake при одном запуске AP — два повторных подключения.
+Драйвер принял три нешифрованных deauth с признаком CCMP/CipherMis;
+первый RXD2=e0044001, FC=00c0. Прежний фильтр отверг бы именно такой кадр.
+Ошибок ключей/PN/DMA нет: EAPOL6/6, encryptedTX/RX10/49,53/53/53команды,
+20/20завершённых runtimeTX. Остановка чистая, DMAidle/MCUstopped,
+inflight0, MemAvailable7760KiB. Пользователь сообщил, что ping не выполнял;
+DHCP-аренда, маршрут и TCP отдельно ещё не подтверждены.

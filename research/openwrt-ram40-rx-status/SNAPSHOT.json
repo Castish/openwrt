@@ -51,11 +51,195 @@
   "frequency_MHz": 2412,
   "AP_restart_same_boot_supported": false,
   "new_NOR_or_UBoot_write_required": false,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "QEMU_MCU_DMA_CCMP_RF_emulated": false,
   "SSID_visibility_fix_claimed": false,
   "snapshot_kind": "Original RAM40 management RX status trial sources",
   "source_files_byte_identical_to_frozen_workspace": true,
   "original_personal_archive_sha256": "f3736e818cba85c716a4a985a7ce7e2fd4efa55d70e81015823f7390dfa4a6eb",
-  "private_keys_binary_images_OEM_inputs_included": false
+  "private_keys_binary_images_OEM_inputs_included": false,
+  "hardware_tested_at_issuance": false,
+  "hardware_result": {
+    "source": "Owner uploaded complete RAM40 console/report after clean stop",
+    "source_file_bytes": 18010,
+    "source_file_sha256": "d0a4c29d6faa9da41b8efed867840c71f83457c8597fc1f30df123b27d476119",
+    "kernel": "6.12.113-c80-openwrt-ram40-rx-status",
+    "AP_starts_stops": [
+      1,
+      1
+    ],
+    "distinct_clients_in_handshakes": 1,
+    "physical_WPA2_handshakes_completed": 3,
+    "physical_reconnects_observed": 2,
+    "connections_disconnects": [
+      3,
+      3
+    ],
+    "peer_adds_deletes": [
+      3,
+      3
+    ],
+    "STA_creates_deletes": [
+      3,
+      3
+    ],
+    "auth_assoc_reassoc_deauth_disassoc": [
+      3,
+      3,
+      0,
+      3,
+      0
+    ],
+    "GTK_refreshes": 1,
+    "key_adds_deletes_refused": [
+      5,
+      1,
+      0
+    ],
+    "authorizations": 3,
+    "EAPOL_TX_RX": [
+      6,
+      6
+    ],
+    "encrypted_TX_RX": [
+      10,
+      49
+    ],
+    "blocked_TX_RX": [
+      0,
+      0
+    ],
+    "replay_bad_crypto": [
+      0,
+      0
+    ],
+    "runtime_management_submitted_completed": [
+      4,
+      4
+    ],
+    "runtime_data_submitted_completed": [
+      16,
+      16
+    ],
+    "runtime_total_submitted_headers_tokens_completed": [
+      20,
+      20,
+      20,
+      20
+    ],
+    "runtime_command_submitted_completed_acked": [
+      53,
+      53,
+      53
+    ],
+    "command_payload_reuses": 30,
+    "command_ring_wraps": 0,
+    "command_fault": 0,
+    "inflight_token_fault": [
+      0,
+      0
+    ],
+    "RX_gate_checked_accepted_rejected": [
+      5490,
+      5418,
+      72
+    ],
+    "RX_gate_legacy_reject": 75,
+    "RX_gate_peer_plaintext_accepted": 3,
+    "RX_gate_rejected_bits16_to25": [
+      0,
+      0,
+      72,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "RX_gate_rejected_modes": [
+      1,
+      0,
+      0,
+      0,
+      71,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "RX_gate_peer_rejected_subtypes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "first_peer_plain_RXD2": "e0044001",
+    "first_peer_plain_FC": "00c0",
+    "first_peer_plain_cipher_mode": 4,
+    "first_peer_plain_CipherMis": 1,
+    "first_peer_plain_unprotected_deauth": true,
+    "original_gate_would_reject_observed_deauth": true,
+    "original_RAM39_failed_frames_not_captured": true,
+    "result_primary_cleanup_critical": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "DMA_idle_MCU_stopped": [
+      1,
+      1
+    ],
+    "total_MCU_TX_submitted_completed": [
+      84,
+      84
+    ],
+    "scheduler_restored": true,
+    "pools_retained_until_reboot": 1,
+    "final_GTK_PTK_authorized_BMC": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "AP_active_us": 141765020,
+    "precleanup_beacon_raw_low16": 1384,
+    "precleanup_time_us": 202950094,
+    "initial_GTK_time_us": 61200020,
+    "final_RX_delivered": 55,
+    "final_RX_ARP_IPv4": [
+      18,
+      31
+    ],
+    "MemAvailable_KiB": 7760,
+    "fresh_boot_required": 1,
+    "power_cycle_required": 0,
+    "flash_writes": 0,
+    "physical_ping_not_performed_owner_confirmed": true,
+    "physical_DHCP_lease_route_TCP_not_confirmed": true,
+    "next_check": "Same RAM40 normal reboot/start and one Wi-Fi client; confirm physical interface route, DHCP address, ping then TCP; no new image required",
+    "raw_logs_addresses_keys_not_published": true
+  },
+  "next_check": "Same RAM40 image; physical Wi-Fi route/DHCP/ping/TCP, ping not performed yet"
 }
