@@ -1,0 +1,21 @@
+config interface 'loopback'
+        option device 'lo'
+        option proto 'static'
+        option ipaddr '127.0.0.1'
+        option netmask '255.0.0.0'
+
+config globals 'globals'
+        option packet_steering '0'
+
+config interface 'lan'
+        option device 'lan1'
+        option proto 'static'
+        option ipaddr '192.168.0.1'
+        option netmask '255.255.255.0'
+
+config interface 'wifi_ram'
+        option device 'c80wlan0'
+        option proto 'static'
+        option ipaddr '192.168.2.1'
+        option netmask '255.255.255.0'
+        option force_link '1'

@@ -341,6 +341,12 @@
       "source_files": 72,
       "source_bytes": 883289,
       "snapshot_path": "research/openwrt-ram32-cfg80211"
+    },
+    {
+      "stage": "openwrt-ram33-reconnect",
+      "source_files": 78,
+      "source_bytes": 1026727,
+      "snapshot_path": "research/openwrt-ram33-reconnect"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

@@ -1,0 +1,25 @@
+{
+  "snapshot_kind": "Original RAM33 source exported after software verification",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "hardware_tested": false,
+  "baseline_native_cases": 2591,
+  "IRQ_gate_cases": 18,
+  "cfg_control_cases": 652,
+  "new_session_cases": 214,
+  "new_OEM_ARM_reassociation_cases": 8,
+  "QEMU_real_cfg80211_hostapd_commands": [
+    44,
+    47
+  ],
+  "QEMU_client_connections_per_boot": 3,
+  "QEMU_AP_starts_per_boot": 1,
+  "QEMU_synthetic_backend_only": true,
+  "QEMU_pinned_SSH_password_cases": 4,
+  "source_patch_files": 26,
+  "source_entries_restored": 86723,
+  "rootfs_entries_restored": 600,
+  "per_peer_reconnect_implemented": true,
+  "AP_restart_same_boot_implemented": false,
+  "original_private_archive_sha256": "118201896f0c7eb2984bf4db1d72c9bf7b7fc1fd76ddd25eabafcbd93d9b96c4",
+  "private_keys_and_OEM_firmware_images_included": false
+}

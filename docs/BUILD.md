@@ -91,3 +91,20 @@ beacon в MCU, stop_ap — завершения прежней процедур�
 
 Образ по-прежнему загружается из RAM. Полной UCI wifi up интеграции, WPA2
 и готового flash/sysupgrade-формата эта версия не предоставляет.
+
+## RAM33 reconnect
+
+research/openwrt-ram33-reconnect сохраняет пакеты и SSH-overlay RAM32.
+Скопируйте собственные rootfs overrides/ в локальную rootfs; полный Linux-патч
+теперь содержит26 файлов. Добавлены c80_session_core.h и два1152-байтовых
+DMA command buffer; прежние смещения DMA объектов сохранены, pool вырос
+на2320 байт до668112. Native session verifier проверяет действительные
+функции с синтетическими device effects, но не весь c80_run boot/teardown.
+build-qemu.sh строит отдельный software-peer kernel; он не предназначен
+для роутера. В физическом ядре C80_NET_SELFTEST отключён.
+
+Новый AP SSID — C80-RAM33. Копируйте четыре TFTP-файла, затем manifest последним;
+установленный native U-Boot скачает их после reboot. Auth CPIO по40d00000
+сохраняется. Клиент переподключается до stop, AP start выполняется один раз.
+Счётчики живой сессии доступны в /sys/kernel/c80_wifi/session без run-mutex.
+Архив персональных образов и сырые тестовые логи в публичный Git не входят.
