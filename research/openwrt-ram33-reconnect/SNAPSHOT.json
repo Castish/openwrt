@@ -1,7 +1,7 @@
 {
   "snapshot_kind": "Original RAM33 source exported after software verification",
   "source_files_byte_identical_to_frozen_workspace": true,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "baseline_native_cases": 2591,
   "IRQ_gate_cases": 18,
   "cfg_control_cases": 652,
@@ -21,5 +21,46 @@
   "per_peer_reconnect_implemented": true,
   "AP_restart_same_boot_implemented": false,
   "original_private_archive_sha256": "118201896f0c7eb2984bf4db1d72c9bf7b7fc1fd76ddd25eabafcbd93d9b96c4",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "hardware_tested_at_source_issuance": false,
+  "hardware_validation": {
+    "received_date": "2026-10-21",
+    "received_timezone": "Europe/Moscow",
+    "AP_starts": 1,
+    "AP_stops": 1,
+    "peer_connections": 8,
+    "repeat_connections_after_initial": 7,
+    "peer_disconnects": 8,
+    "STA_creates": 8,
+    "STA_deletes": 8,
+    "runtime_management_TX": {
+      "submitted": 14,
+      "completed": 14
+    },
+    "Linux_data_TX": {
+      "submitted": 32,
+      "completed": 32
+    },
+    "runtime_TX_paired_completions": 46,
+    "MCU_commands": {
+      "submitted": 43,
+      "completed": 43,
+      "acked": 43,
+      "reusable_payload_reuses": 20,
+      "ring_wraps": 0,
+      "faults": 0
+    },
+    "payload_reuses": 30,
+    "stop_result": 0,
+    "cleanup": 0,
+    "critical": 0,
+    "DMA_idle": true,
+    "MCU_stopped": true,
+    "MemAvailable_after_stop_kB": 7892,
+    "Windows_shown_ping_sent": 10,
+    "Windows_shown_ping_received": 10,
+    "Windows_shown_ping_lost": 0,
+    "REASSOC_frames_seen": 0,
+    "report": "VALIDATION.md"
+  }
 }
