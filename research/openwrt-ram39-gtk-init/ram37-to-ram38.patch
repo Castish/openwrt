@@ -1,0 +1,137 @@
+--- /dev/null
++++ b/verify-bmc-profile.c
+@@ -0,0 +1,33 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Actual BMC producer, independent OEM oracle and guard pages. */
++#define _GNU_SOURCE
++#include "private/bmc-profile-fixture.h"
++#include <sys/mman.h>
++#include <unistd.h>
++int main(int argc,char **argv)
++{
++    unsigned cases=0;assert(argc==2);load_security(argv[1]);
++    struct secure_model *s=secure_fixture();c80_u8 body[252];
++    c80_security_bmc_payload(&s->m.io,body,0);
++    assert(!memcmp(body,sta_security[0],252));
++    assert(c80_get16(body+2)==3 && c80_get16(body+28)==8 && c80_get16(body+30)==8 && c80_get32(body+32)==1 && c80_get16(body+36)==13);
++    ++cases;free(s);
++    long page=sysconf(_SC_PAGESIZE);assert(page>=4096);
++    c80_u8 *p=mmap(NULL,page*2,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);assert(p!=MAP_FAILED);
++    assert(!mprotect(p+page,page,PROT_NONE));
++    for(unsigned off=0;off<2;++off) {
++        unsigned bytes=off?28:252;s=secure_fixture();c80_u8 *b=p+page-bytes;
++        c80_security_bmc_payload(&s->m.io,b,off);
++        assert(!memcmp(b,sta_security[off],bytes));++cases;free(s);
++    }
++    assert(!munmap(p,page*2));
++    for(unsigned fault=1;fault<=10;++fault) {
++        if(fault==8)continue;
++        s=secure_fixture();s->fault=fault;
++        assert(request(s,C80_KEY_ADD,0) && s->done==1 && s->result && !s->m.r.security.bmc_live && !s->m.r.security.gtk && s->posts==1);
++        for(unsigned i=0;i<16;++i)assert(!s->m.r.security.gtk_key[i]);
++        ++cases;free(s);
++    }
++    assert(cases==12);printf("PASS: %u BMC normal-profile/OEM/guard/refusal cases; ASan/UBSan; synthetic hardware.\n",cases);
++    return 0;
++}
+--- a/c80_security_core.h
++++ b/c80_security_core.h
+@@ -23,13 +23,19 @@
+     if(!off) {
+         body[32]=0;for(i=0;i<6;++i) body[44+i]=255;
+         body[50]=14;body[56]=0;body[65]=1;body[117]=0;
++        /* Normal AP request40361efc selects feature0x2101, not0x2001.
++         * The OEM402ec658 handler inserts tag8/len8/flags1 before WTBL.
++         * Caller provides252 bytes on create,28 bytes on delete. */
++        for(i=216;i;--i) body[36+i-1]=body[28+i-1];
++        c80_put16(body+2,3);c80_put16(body+28,8);c80_put16(body+30,8);
++        c80_put32(body+32,1);
+     }
+ }
+ static c80_u32 c80_security_bmc(struct c80_io *io,struct c80_result *r,c80_u32 off)
+ {
+-    c80_u8 body[244];c80_u32 rc;
++    c80_u8 body[252];c80_u32 rc;
+     c80_security_bmc_payload(io,body,off);
+-    rc=c80_security_exchange(io,r,0x25,body,off?28:244);
++    rc=c80_security_exchange(io,r,0x25,body,off?28:252);
+     if(!rc) r->security.bmc_live=!off;
+     return rc;
+ }
+--- a/verify-security.c
++++ b/verify-security.c
+@@ -9,7 +9,7 @@
+     unsigned pending,done,result,posts,delivered,fault;
+ };
+ static unsigned scases;
+-static c80_u8 key_oracle[6][52],sta_security[5][244],tx_security[2][32],bss_security[2][52];
++static c80_u8 key_oracle[6][52],sta_security[5][252],tx_security[2][32],bss_security[2][52];
+ static c80_u8 synthetic_key[16];
+ static void spass(const char *name) { ++scases;printf("PASS SECURITY %s\n",name); }
+ static void secure_write(void *o,c80_u32 a,c80_u32 value)
+@@ -18,14 +18,14 @@
+     if(a!=0x180043f8) { wr(o,a,value);return; }
+     unsigned slot=(value+127)%128;struct c80_desc *d=&m->pool.tx[slot];
+     unsigned bytes=(d->ctrl>>16)&0x3fff;const c80_u8 *p=dma_pointer(m,d->addr,bytes);
+-    c80_u8 reply[44]={},expect[244];unsigned n=bytes-64,k,body;
++    c80_u8 reply[44]={},expect[252];unsigned n=bytes-64,k,body;
+     if(p[41]==0x26) {
+         unsigned off=m->r.phase-25;assert(off<2 && n==(off?36u:52u));
+         memcpy(expect,bss_security[off],n);memcpy(expect+(off?20:36),own_mac,6);assert(!memcmp(expect,p+64,n));
+         *reg(m,a)=value;d->ctrl|=C80_DONE;*reg(m,0x180043fc)=value;++s->posts;
+         c80_put32(reply,(7u<<29)|44);c80_put16(reply+16,28);c80_put16(reply+18,0xe000);reply[20]=0xed;reply[21]=p[39];reply[24]=reply[28]=0x26;c80_put16(reply+38,off?1:2);event(m,reply,44);return;
+     }
+-    assert(!m->net_busy && !m->command_busy && (n==52 || n==28 || n==244));
++    assert(!m->net_busy && !m->command_busy && (n==52 || n==28 || n==244 || n==252));
+     assert(p[36]==0xed && p[43]==1 && p[39] && p[39]<=15);
+     assert(value==(*reg(m,a)+1)%128 && !d->addr1 && !d->info);
+     if(p[41]==0x32) {
+@@ -34,7 +34,7 @@
+         memcpy(expect,key_oracle[k],52);
+     } else {
+         assert(p[41]==0x25 && !p[38]);
+-        k=p[65]?(n==244?2:p[80]==2?3:4):n==244?0:1;
++        k=p[65]?(n==244?2:p[80]==2?3:4):n==252?0:1;
+         memcpy(expect,sta_security[k],n);
+         if(p[65]) { memcpy(expect+20,client_mac,6);if(n==244)memcpy(expect+44,client_mac,6); }
+     }
+@@ -92,7 +92,7 @@
+ {
+     FILE *f=fopen(path,"rb");assert(f);unsigned n=0;
+     for(unsigned i=0;i<6;++i)assert(fread(key_oracle[i],1,52,f)==52);
+-    for(unsigned i=0;i<5;++i) { assert(fread(&n,4,1,f)==1 && (n==28 || n==244));assert(fread(sta_security[i],1,n,f)==n); }
++    for(unsigned i=0;i<5;++i) { assert(fread(&n,4,1,f)==1 && n==(i==0?252u:i==2?244u:28u));assert(fread(sta_security[i],1,n,f)==n); }
+     assert(fread(tx_security,1,64,f)==64);
+     for(unsigned i=0;i<2;++i) { assert(fread(&n,4,1,f)==1 && n==(i?36u:52u));assert(fread(bss_security[i],1,n,f)==n); }
+     assert(fgetc(f)==EOF);fclose(f);
+--- a/rootfs/etc/c80-hostapd.conf
++++ b/rootfs/etc/c80-hostapd.conf
+@@ -14,7 +14,7 @@
+ logger_stdout_level=2
+ interface=c80wlan0
+ ctrl_interface=/var/run/c80-hostapd
+-ssid=C80-RAM37
++ssid=C80-RAM38
+ dtim_period=1
+ wmm_enabled=0
+ auth_algs=1
+--- a/rootfs/usr/sbin/c80-wifi
++++ b/rootfs/usr/sbin/c80-wifi
+@@ -2,7 +2,7 @@
+ . /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+ case "${1:-}" in
+ start)
+-    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram37-channel1' ] || { echo 'Requires the RAM37 cfg80211 router kernel.';exit 1; }
++    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram38-bmc-profile' ] || { echo 'Requires the RAM38 cfg80211 router kernel.';exit 1; }
+     mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+     /etc/init.d/dnsmasq start
+     ( echo 1 > /sys/kernel/c80_wifi/run
+@@ -48,7 +48,7 @@
+     # evidence that a later network operation kept the AP running.
+     sleep 1
+     c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    echo 'hostapd started C80-RAM37 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
++    echo 'hostapd started C80-RAM38 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+     ;;
+ stop)
+     echo 1 > /sys/kernel/c80_wifi/stop || exit 1

@@ -66,7 +66,9 @@
 | [openwrt-ram36-beacon-diag](../research/openwrt-ram36-beacon-diag/) | SSID появился один раз, после reboot исчез; четыре снимка и чистые остановки получены | 95 |
 | [openwrt-ram37-channel1](../research/openwrt-ram37-channel1/) | канал1/2412MHz подтверждён; SSID отсутствует, raw beacon0 через246,9секунды; stop чистый | 100 |
 
-| [openwrt-ram38-bmc-profile](../research/openwrt-ram38-bmc-profile/) | BMC0x2101/tag8/252байта; программные проверки прошли, аппаратный тест ожидается | 105 |
+| [openwrt-ram38-bmc-profile](../research/openwrt-ram38-bmc-profile/) | SSID виден,2ассоциации; GMK/GTKsetupfailed; stop чистый | 105 |
+
+| [openwrt-ram39-gtk-init](../research/openwrt-ram39-gtk-init/) | проверенный GTK refresh до PTK; программные проверки прошли, аппаратный тест ожидается | 108 |
 
 ## Подтверждённый рубеж RAM31
 
@@ -166,3 +168,18 @@ flags1 между BASIC и WTBL, увеличивая тело244→252байт�
 Связь отличия с отсутствием маяков ещё не подтверждена на физическом радио.
 3712 native,23 OEM ARM,40 QEMU WPA2 и13 startup-removal checks прошли.
 Следующий аппаратный тест — C80-RAM38 через прежние TFTP/SSH.
+
+## RAM38: SSID и ассоциация; RAM39: первый GTK refresh
+
+В RAM38 сеть появилась, клиент дважды ассоциировался, начальные EAPOL2/2,
+но hostapd GMK/GTK setup failed, driver refused2, PTK/authorization0.
+Raw beacon1129 через115,58секунды после GTK, APactive115,595секунды,
+36ACK/0fault, DMAidle/MCUstopped и штатное удержание clientTXpool до reboot.
+Это один успешный поиск сети; причинность и повторяемость не установлены.
+
+Обычный hostapd при первом клиенте заменяет GTK. Настоящий RAM38 core
+воспроизводит отказ смены уже установленного ключа. RAM39 разрешает GTK
+refresh до PTK/авторизации через два подтверждённых удаления и новую установку.
+Одинаковый ключ не переустанавливается, активный PTK не заменяется. QEMU
+использует общую политику вместо прежнего accept-all stub.3753 native,
+23OEMARM,43QEMU/13startup-removal checks прошли. Физический тест ожидается.

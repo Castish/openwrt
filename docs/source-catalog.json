@@ -377,6 +377,12 @@
       "source_files": 105,
       "source_bytes": 1164008,
       "snapshot_path": "research/openwrt-ram38-bmc-profile"
+    },
+    {
+      "stage": "openwrt-ram39-gtk-init",
+      "source_files": 108,
+      "source_bytes": 1198919,
+      "snapshot_path": "research/openwrt-ram39-gtk-init"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

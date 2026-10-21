@@ -178,3 +178,14 @@ trace-normal-ap-request.py и trace-bmc-profile.py исполняют OEM ARM co
 но физические CCMP/DMA/MCU/RF в этих тестах не эмулируются.
 Копируйте4новых личных TFTP payload, manifest последним, обычный SSH reboot.
 Нового U-Boot/NOR write нет. Персональные CPIO/ключи/OEM inputs остаются локально.
+
+## RAM39: initial client GTK refresh
+
+research/openwrt-ram39-gtk-init/ сохраняет BMC252/tag8 и канал1. Общая политика
+key add/reinstall в c80_security_types.h используется настоящим MCU core и
+QEMU backend. До PTK/авторизации GTK refresh выполняет delete/delete/install,
+ACK+DDONE на каждом шаге. Изменённый активный PTK/GTK rekey по-прежнему запрещён.
+verify-gtk-refresh.sh исполняет текущий core и старый RAM38 baseline,41новыйcase.
+Полный Linux patch32файла, ram38-to-ram39.patch,3753native/23OEMARM/43QEMU/
+13startup-removal checks и прежние7overrides. Локальные OEM/SSH inputs нужны
+для сборки. Копируйте4личныхpayloads, c80-start.txt последним, SSHreboot.

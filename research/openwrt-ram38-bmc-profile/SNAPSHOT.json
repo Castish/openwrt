@@ -26,7 +26,87 @@
   "physical_MCU_CCMP_DMA_RF_emulated": false,
   "snapshot_kind": "Original RAM38 BMC normal-profile conformance trial sources; software verified",
   "source_files_byte_identical_to_frozen_workspace": true,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "original_personal_archive_sha256": "5642cf907919d5cede3bb3d55fea6a1e0cfde45031af804cb26dbbbf676da37c",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "hardware_tested_at_issuance": false,
+  "hardware_result": {
+    "SSID_visible_owner_reported": true,
+    "connection_failed_owner_reported": true,
+    "kernel": "6.12.113-c80-openwrt-ram38-bmc-profile",
+    "channel": 1,
+    "frequency_MHz": 2412,
+    "snapshot_beacon_raw_low16": [
+      1,
+      0,
+      0,
+      1129
+    ],
+    "snapshot_guards": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "snapshots_us": [
+      111910107,
+      111920044,
+      111930021,
+      227510084
+    ],
+    "post_GTK_to_precleanup_us": 115580063,
+    "AP_active_us": 115595024,
+    "GTK_BMC_live_at_precleanup": true,
+    "AP_starts_stops": [
+      1,
+      1
+    ],
+    "associations": 2,
+    "disconnects": 2,
+    "EAPOL_TX_RX": [
+      2,
+      2
+    ],
+    "key_refused": 2,
+    "PTK_installs": 0,
+    "authorizations": 0,
+    "encrypted_TX_RX": [
+      0,
+      0
+    ],
+    "hostapd_error": "kernel reports: key addition failed; WPA: GMK/GTK setup failed",
+    "MCU_commands_submitted_completed_acked": [
+      36,
+      36,
+      36
+    ],
+    "command_payload_reuses": 13,
+    "command_fault": 0,
+    "total_TX_submitted_completed": [
+      67,
+      67
+    ],
+    "runtime_TX_submitted_headers_tokens_completed": [
+      4,
+      4,
+      4,
+      4
+    ],
+    "inflight": 0,
+    "result_primary_cleanup_critical": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "DMA_idle": 1,
+    "MCU_stopped": 1,
+    "pools_retained": 1,
+    "scheduler_restored": 1,
+    "MemAvailable_KiB": 7592,
+    "fresh_boot_required": 1,
+    "power_cycle_required": 0,
+    "flash_writes": 0
+  },
+  "next_experiment": "RAM39 checked pre-PTK first-station GTK refresh; channel1 and BMC252 retained"
 }

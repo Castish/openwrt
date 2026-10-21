@@ -1,0 +1,330 @@
+--- /dev/null
++++ b/c80_radio.h
+@@ -0,0 +1,11 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef C80_RADIO_H
++#define C80_RADIO_H
++/* One boot-time profile, shared by the physical adapter and QEMU peer.
++ * Zero is retained solely for legacy channel6 regression fixtures. */
++#define C80_EXPERIMENT_CHANNEL 1u
++static inline unsigned c80_selected_channel(unsigned channel)
++{ return channel?channel:6u; }
++static inline unsigned c80_selected_frequency(unsigned channel)
++{ return 2407u+5u*c80_selected_channel(channel); }
++#endif
+--- /dev/null
++++ b/verify-channel.c
+@@ -0,0 +1,52 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Reuse the actual-core fixture, replacing only its two OEM channel oracles. */
++#define main c80_previous_core_cases
++#include "verify-core.c"
++#undef main
++int main(int argc,char **argv)
++{
++    static const char *names[]={"test_mcu.bin","test_wifi.bin","WIFI_RAM_CODE_iemi.bin","WIFI_RAM_CODE_demi.bin","mt7626_patch_e1_hdr.bin","WIFI_RAM_CODE_7626.bin"};
++    unsigned cases=0;FILE *f;char path[4096];c80_u8 saved[2][1152];
++    assert(argc==5);setvbuf(stdout,NULL,_IOLBF,0);
++    f=fopen(argv[3],"rb");assert(f && fread(synthetic_nvm,1,1024,f)==1024 && fgetc(f)==EOF);fclose(f);
++    f=fopen(argv[2],"rb");assert(f);
++    for(unsigned i=0;i<59;++i) {
++        c80_u8 size[4];assert(fread(size,1,4,f)==4);stock_sizes[i]=c80_get32(size);
++        assert(stock_sizes[i]<=1152 && fread(stock_packets[i],1,stock_sizes[i],f)==stock_sizes[i]);
++    }
++    assert(fgetc(f)==EOF);fclose(f);
++    for(unsigned i=0;i<6;++i) {
++        snprintf(path,sizeof(path),"%s/%s",argv[1],names[i]);f=fopen(path,"rb");assert(f);
++        firmware[i].bytes=c80_blob_sizes[i];firmware[i].data=malloc(firmware[i].bytes);assert(firmware[i].data);
++        assert(fread((void *)firmware[i].data,1,firmware[i].bytes,f)==firmware[i].bytes && fgetc(f)==EOF);fclose(f);
++    }
++    memcpy(saved,stock_packets+47,sizeof(saved));
++    for(unsigned channel=1;channel<=6;channel+=5) {
++        if(channel==1) {
++            f=fopen(argv[4],"rb");assert(f);
++            for(unsigned i=0;i<2;++i) {
++                c80_u8 size[4];assert(fread(size,1,4,f)==4 && c80_get32(size)==stock_sizes[47+i]);
++                assert(fread(stock_packets[47+i],1,stock_sizes[47+i],f)==stock_sizes[47+i]);
++            }
++            assert(fgetc(f)==EOF);fclose(f);
++        } else memcpy(stock_packets+47,saved,sizeof(saved));
++        test_radio_channel(0,0,0,channel);test_radio_channel(29,0,0,channel);test_radio_channel(30,0,0,channel);cases+=3;
++        for(unsigned k=1;k<=2;++k)for(unsigned fault=1;fault<=15;++fault) {
++            unsigned rc=fault<=2?38:fault==3||fault==5||fault==6?39:fault==7?14:fault==10?12:13;
++            if(fault==12)rc=0;
++            test_radio_channel(fault,k,rc,channel);++cases;
++        }
++        struct c80_dma_pool *pool=calloc(1,sizeof(*pool));assert(pool);
++        struct c80_io io={.pool=pool,.radio_channel=channel};c80_u8 body[528];
++        assert(!c80_beacon_payload(&io,body,1) && body[44+53]==3 && body[44+54]==1 && body[44+55]==channel);++cases;
++        assert(c80_radio_frequency(&io)==(channel==1?2412u:2437u));++cases;free(pool);
++    }
++    const unsigned bad[]={2,11,14,36,255,~0u};
++    for(unsigned i=0;i<sizeof(bad)/sizeof(*bad);++i) {
++        struct c80_io io={.radio_channel=bad[i]};struct c80_result result={0};
++        assert(c80_run(&io,NULL,&result)==C80_RADIO_BAD_STATE && result.phase==1 && result.primary==C80_RADIO_BAD_STATE);++cases;
++    }
++    for(unsigned i=0;i<6;++i)free((void *)firmware[i].data);
++    assert(cases==76);printf("PASS: %u selected-channel full-core/OEM-oracle/beacon/refusal cases; ASan/UBSan; synthetic hardware.\n",cases);
++    return 0;
++}
+--- a/c80_cfg80211.h
++++ b/c80_cfg80211.h
+@@ -1,9 +1,10 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+-/* Single AP, device SME, CCK/channel6 transport. WPA2-PSK/CCMP is optional.
++/* Single AP, device SME, CCK/one selected channel. WPA2-PSK/CCMP is optional.
+  * All MCU/DMA access stays in the run thread; nl80211 uses completions only.
+  * Included after the Linux packet callbacks in both real and QEMU adapters. */
+ #ifndef C80_CFG80211_H
+ #define C80_CFG80211_H
++#include "c80_radio.h"
+ #include <net/cfg80211.h>
+ #include <linux/completion.h>
+ #include <linux/jiffies.h>
+@@ -32,7 +33,7 @@
+ { return wiphy_priv(wiphy); }
+ 
+ static int c80_cfg_beacon(struct net_device *dev,const struct cfg80211_beacon_data *b,
+-                         u8 *out,u32 *bytes,u32 *tim,const u8 *ssid,u32 ssid_len,bool secure)
++                         u8 *out,u32 *bytes,u32 *tim,const u8 *ssid,u32 ssid_len,bool secure,u32 channel)
+ {
+     const u8 *parts[2]={b->head,b->tail};size_t lengths[2]={b->head_len,b->tail_len};
+     size_t k,pos,n;bool found_ssid=false,found_rates=false,found_channel=false,found_rsn=false;
+@@ -54,7 +55,7 @@
+             if(found_rates || n!=4 || memcmp(p+2,supported,4)) return -EOPNOTSUPP;
+             found_rates=true;
+         } else if(id==WLAN_EID_DS_PARAMS) {
+-            if(found_channel || n!=1 || p[2]!=6) return -EOPNOTSUPP;
++            if(found_channel || n!=1 || p[2]!=channel) return -EOPNOTSUPP;
+             found_channel=true;
+         } else if(id==WLAN_EID_RSN) {
+             if(!secure || found_rsn || !c80_rsn_valid(p+2,n)) return -EOPNOTSUPP;
+@@ -84,10 +85,10 @@
+           s->crypto.akm_suites[0]!=WLAN_AKM_SUITE_PSK):
+           (s->privacy || s->crypto.wpa_versions || s->crypto.cipher_group || s->crypto.n_ciphers_pairwise || s->crypto.n_akm_suites)) ||
+        (s->auth_type!=NL80211_AUTHTYPE_OPEN_SYSTEM && s->auth_type!=NL80211_AUTHTYPE_AUTOMATIC) ||
+-       !s->chandef.chan || s->chandef.chan->center_freq!=2437 ||
+-       s->chandef.center_freq1!=2437 || s->chandef.center_freq2 ||
++       !s->chandef.chan || s->chandef.chan->center_freq!=a->channel.center_freq ||
++       s->chandef.center_freq1!=a->channel.center_freq || s->chandef.center_freq2 ||
+        s->chandef.width!=NL80211_CHAN_WIDTH_20_NOHT) { ++a->rejected;return -EOPNOTSUPP; }
+-    rc=c80_cfg_beacon(dev,&s->beacon,frame,&bytes,&tim,s->ssid,s->ssid_len,c->wpa2);
++    rc=c80_cfg_beacon(dev,&s->beacon,frame,&bytes,&tim,s->ssid,s->ssid_len,c->wpa2,a->channel.hw_value);
+     if(rc) { ++a->rejected;return rc; }
+     if(a->requested || a->active || a->finished) return -EALREADY;
+     if(!READ_ONCE(a->prepared)) return -EAGAIN;
+@@ -117,7 +118,7 @@
+ static int c80_cfg_change_beacon(struct wiphy *wiphy,struct net_device *dev,struct cfg80211_ap_update *s)
+ {
+     struct c80_cfg *a=c80_cfg_from_wiphy(wiphy);u8 frame[C80_CFG_BEACON_MAX];u32 n,tim;int rc;
+-    rc=c80_cfg_beacon(dev,&s->beacon,frame,&n,&tim,a->ssid,a->ssid_len,a->owner->wpa2);
++    rc=c80_cfg_beacon(dev,&s->beacon,frame,&n,&tim,a->ssid,a->ssid_len,a->owner->wpa2,a->channel.hw_value);
+     if(rc) return rc;
+     /* This first control port freezes the offloaded template for this run. */
+     return n==a->beacon_len && tim==a->tim_offset && !memcmp(frame,a->beacon,n)?0:-EOPNOTSUPP;
+@@ -224,7 +225,7 @@
+     a=wiphy_priv(wiphy);a->owner=c;
+     init_completion(&a->started);init_completion(&a->stopped);
+     mutex_init(&a->key_mutex);spin_lock_init(&a->key_lock);init_completion(&a->key_completed);
+-    a->channel=(struct ieee80211_channel){.band=NL80211_BAND_2GHZ,.center_freq=2437,.hw_value=6,.max_power=20};
++    a->channel=(struct ieee80211_channel){.band=NL80211_BAND_2GHZ,.center_freq=c80_selected_frequency(c->radio_channel),.hw_value=c80_selected_channel(c->radio_channel),.max_power=20};
+     for(i=0;i<4;++i) a->rates[i]=(struct ieee80211_rate){.bitrate=bitrates[i],.hw_value=i};
+     a->band=(struct ieee80211_supported_band){.channels=&a->channel,.n_channels=1,.bitrates=a->rates,.n_bitrates=4};
+     set_wiphy_dev(wiphy,c->dev);ether_addr_copy(wiphy->perm_addr,mac);
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -77,6 +77,7 @@
+     struct c80_beacon_diag_sample sample[4];
+ };
+ struct c80_result;
++#include "c80_radio.h"
+ struct c80_io {
+     void *context;
+     c80_u32 (*read)(void *,c80_u32);
+@@ -93,6 +94,7 @@
+     c80_u32 devinfo_test; /* Linux enables the bounded ON/OFF experiment. */
+     c80_u32 bss_test; /* OWN/BASIC context lifecycle between DEVINFO ON/OFF. */
+     c80_u32 radio_test; /* One channel, bounded MAC ON/listen/OFF lifecycle. */
++    c80_u32 radio_channel; /* 0 preserves legacy channel6; current Linux profile selects1. */
+     c80_u32 beacon_test; /* Bounded firmware beacon offload inside radio. */
+     c80_u32 long_beacon_test; /* Linux opts into180s; CONTROL stays30s. */
+     c80_u32 watch_test; /* Compare idle radio vs beacon window; read-only HIF watch. */
+@@ -125,6 +127,10 @@
+     struct c80_dma_pool *pool;
+     c80_u32 dma_base;
+ };
++static inline c80_u32 c80_radio_channel(const struct c80_io *io)
++{ return c80_selected_channel(io->radio_channel); }
++static inline c80_u32 c80_radio_frequency(const struct c80_io *io)
++{ return c80_selected_frequency(io->radio_channel); }
+ static c80_u32 c80_auth_ring_size(const struct c80_io *io)
+ {
+     /* RAM29 stopped before consuming slot127 when CPU128 was published.
+@@ -1805,6 +1811,7 @@
+     for(i=0;i<32;++i) body[12+i]=txd[i];
+     c80_put16(body+12,32+frame_bytes);
+     for(i=0;i<frame_bytes;++i) body[44+i]=template[i];
++    if(!io->cfg80211_test) body[44+55]=(c80_u8)c80_radio_channel(io);
+     for(i=0;i<6;++i) body[54+i]=body[60+i]=io->pool->nvm_payload[8+i];
+     return 0;
+ }
+@@ -1880,7 +1887,7 @@
+     }
+     r->beacon_complete=1; return 0;
+ }
+-/* Five packets proven against OEM builders: MAC OFF,channel6 HT20,
++/* Five packets proven against OEM builders: MAC OFF,selected channel HT20,
+  * 1x1 path,MAC ON,MAC OFF. Keep BSS/device contexts alive until completed.
+  * No beacon/sync/STA-record/data TX or radio05 command. */
+ static c80_u32 c80_radio_roundtrip(struct c80_io *io,struct c80_result *r)
+@@ -1894,7 +1901,7 @@
+         for(i=0;i<sizeof(body);++i) body[i]=0;
+         bytes=4;
+         if(step==1 || step==2) {
+-            body[0]=6; body[1]=6; body[3]=1; body[4]=1; bytes=76;
++            body[0]=body[1]=(c80_u8)c80_radio_channel(io); body[3]=1; body[4]=1; bytes=76;
+             /* OEM channel builder fills its49 per-rate entries with0x3f.
+              * This is the factory command field, not a dBm power override. */
+             if(step==1) for(i=20;i<69;++i) body[i]=0x3f;
+@@ -2071,6 +2078,7 @@
+ {
+     c80_u32 i,j,v,rc=0,programmed[4][3]; c80_u64 start;
+     c80_stage(io,r,1);
++    if(c80_radio_channel(io)!=1 && c80_radio_channel(io)!=6) { r->primary=C80_RADIO_BAD_STATE;return r->primary; }
+     if(io->wpa2_test && (!io->session_test || !io->key_fetch || !io->key_done)) { r->primary=C80_KEY_STATE;return r->primary; }
+     if(io->session_test && (!io->cfg80211_test || !io->net_recycle_test || !io->assoc_reply_test || !io->auth_reply_test)) {
+         r->primary=C80_SESSION_STATE;return r->primary;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -47,6 +47,7 @@
+     struct c80_cfg *cfg;
+     const u8 *peer_address;
+     bool cfg_test_only,wpa2,net_authorized;
++    u32 radio_channel;
+     const u8 *peer_rsn;u32 peer_rsn_len;
+     int (*key_test)(struct c80_linux *,struct c80_key_request *);
+     struct net_device *netdev;
+@@ -307,7 +308,7 @@
+     if(!c) return -ENODEV;
+     if(!mutex_trylock(&c->lock)) return -EBUSY;
+     r=&c->result;
+-    n+=sysfs_emit_at(buf,n,"complete=%u channel=6 band=0 width_mhz=20 tx_streams=1 rx_streams=1 data_tx=%u full_AP_stack=0\n",r->radio_complete,!!r->net.submitted);
++    n+=sysfs_emit_at(buf,n,"complete=%u channel=%u band=0 width_mhz=20 tx_streams=1 rx_streams=1 data_tx=%u full_AP_stack=0\n",r->radio_complete,c80_radio_channel(&c->io),!!r->net.submitted);
+     for(i=0;i<5;++i)
+         n+=sysfs_emit_at(buf,n,"%s attempted=%u valid=%u status=%08x ext=%02x echo=%02x event=%u dma=%u wait_us=%u polls=%u\n",
+             names[i],r->radio_attempted[i],r->radio_valid[i],r->radio_status[i],r->radio_ext[i],r->radio_echo[i],
+@@ -331,8 +332,8 @@
+     if(!c) return -ENODEV;
+     if(!mutex_trylock(&c->lock)) return -EBUSY;
+     r=&c->result;
+-    n+=sysfs_emit_at(buf,n,"complete=%u template_source=%s channel=6 width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=%u frame_bytes=%u TIM_pos=%u one_client_experiment=1 full_AP_stack=0 TXD_format=3 frame_type=0 subtype=8\n",
+-        r->beacon_complete,c->io.cfg80211_test?"nl80211":"legacy",
++    n+=sysfs_emit_at(buf,n,"complete=%u template_source=%s channel=%u width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=%u frame_bytes=%u TIM_pos=%u one_client_experiment=1 full_AP_stack=0 TXD_format=3 frame_type=0 subtype=8\n",
++        r->beacon_complete,c->io.cfg80211_test?"nl80211":"legacy",c80_radio_channel(&c->io),
+         c->io.cfg80211_test?32+c->io.ap_beacon_bytes:94,
+         c->io.cfg80211_test?c->io.ap_beacon_bytes:62,
+         c->io.cfg80211_test?32+c->io.ap_tim_offset:88);
+@@ -754,7 +755,7 @@
+             return dev_err_probe(&pdev->dev,-EINVAL,"EMI has a cacheable linear RAM alias\n");
+     c=devm_kzalloc(&pdev->dev,sizeof(*c),GFP_KERNEL);
+     if(!c) return -ENOMEM;
+-    c->dev=&pdev->dev;c->wpa2=true; spin_lock_init(&c->beacon_diag_lock);mutex_init(&c->lock); raw_spin_lock_init(&c->irq_lock);spin_lock_init(&c->net_lock);skb_queue_head_init(&c->net_queue);
++    c->dev=&pdev->dev;c->wpa2=true;c->radio_channel=C80_EXPERIMENT_CHANNEL; spin_lock_init(&c->beacon_diag_lock);mutex_init(&c->lock); raw_spin_lock_init(&c->irq_lock);spin_lock_init(&c->net_lock);skb_queue_head_init(&c->net_queue);
+     for(i=0;i<ARRAY_SIZE(c->windows);++i) {
+         res=platform_get_resource(pdev,IORESOURCE_MEM,i);
+         if(!res || res->start!=expected_base[i] ||
+@@ -771,7 +772,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.cfg80211_test=1,.session_test=1,.wpa2_test=1,.beacon_diag=c80_linux_beacon_diag,.key_fetch=c80_linux_key_fetch,.key_done=c80_linux_key_done,.ap_requested=c80_linux_ap_requested,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.radio_channel=c->radio_channel,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.cfg80211_test=1,.session_test=1,.wpa2_test=1,.beacon_diag=c80_linux_beacon_diag,.key_fetch=c80_linux_key_fetch,.key_done=c80_linux_key_done,.ap_requested=c80_linux_ap_requested,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
+--- a/c80_net_selftest.c
++++ b/c80_net_selftest.c
+@@ -24,6 +24,7 @@
+     struct sk_buff_head net_queue;struct rtnl_link_stats64 net_stats;
+     struct c80_cfg *cfg;const u8 *peer_address;bool cfg_test_only;
+     bool wpa2,net_authorized;const u8 *peer_rsn;u32 peer_rsn_len;
++    u32 radio_channel;
+     int (*key_test)(struct c80_linux *,struct c80_key_request *);
+     bool net_accept,net_stop_requested;
+ };
+@@ -130,6 +131,7 @@
+     if(IS_ERR(pdev)) return PTR_ERR(pdev);
+     s=kzalloc(sizeof(*s),GFP_KERNEL);if(!s) { rc=-ENOMEM;goto device; }
+     s->adapter.dev=&pdev->dev;s->adapter.cfg_test_only=true;s->adapter.wpa2=true;
++    s->adapter.radio_channel=C80_EXPERIMENT_CHANNEL;
+     s->adapter.key_test=c80_selftest_key;
+     {
+         static const u8 rsn[]={48,20,1,0,0,0x0f,0xac,4,1,0,0,0x0f,0xac,4,1,0,0,0x0f,0xac,2,0,0};
+--- a/verify-core.c
++++ b/verify-core.c
+@@ -903,7 +903,7 @@
+            m->result.tx_completed,m->result.rx_packets,m->result.critical);
+     free(m);
+ }
+-static void test_radio(unsigned f,unsigned which,c80_u32 expected)
++static void test_radio_channel(unsigned f,unsigned which,c80_u32 expected,unsigned channel)
+ {
+     struct model *m=calloc(1,sizeof(*m));c80_u32 i,j,rc;
+     assert(m);m->us=100;m->fault=BSS_GOOD;m->rfault=f;m->rstep=which;
+@@ -914,7 +914,7 @@
+     m->io=(struct c80_io){.context=m,.read=read_reg,.write=write_reg,.time_us=model_time,
+         .delay_us=delay,.dma_order=barrier,.copy_emi=copy_emi,.crc_emi=crc_emi,.stage=stage,
+         .pool=&m->pool,.dma_base=0x41000000,.irq_arm=model_irq_arm,.irq_disarm=model_irq_disarm,
+-        .nvm_read=model_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1};
++        .nvm_read=model_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.radio_channel=channel};
+     if(f==16) m->fault=BSS_RESET_STUCK;
+     if(f==17) m->fault=BSS_DMA_BUSY;
+     if(f==18) m->fault=BSS_DEV_ON_FAIL;
+@@ -951,6 +951,8 @@
+     }
+     printf("PASS radio-fault%u-step%u rc=%u tx=%u rx=%u\n",f,which,rc,m->result.tx_completed,m->result.rx_packets);free(m);
+ }
++static void test_radio(unsigned f,unsigned which,c80_u32 expected)
++{ test_radio_channel(f,which,expected,0); }
+ static void test_beacon(unsigned f,unsigned which,c80_u32 expected)
+ {
+     struct model *m=calloc(1,sizeof(*m));c80_u32 i,j,rc;
+--- a/rootfs/etc/c80-hostapd.conf
++++ b/rootfs/etc/c80-hostapd.conf
+@@ -1,6 +1,6 @@
+ driver=nl80211
+ hw_mode=b
+-channel=6
++channel=1
+ beacon_int=100
+ supported_rates=10 20 55 110
+ basic_rates=10 20 55 110
+@@ -14,7 +14,7 @@
+ logger_stdout_level=2
+ interface=c80wlan0
+ ctrl_interface=/var/run/c80-hostapd
+-ssid=C80-RAM36
++ssid=C80-RAM37
+ dtim_period=1
+ wmm_enabled=0
+ auth_algs=1
+--- a/rootfs/usr/sbin/c80-wifi
++++ b/rootfs/usr/sbin/c80-wifi
+@@ -2,7 +2,7 @@
+ . /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+ case "${1:-}" in
+ start)
+-    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram36-beacon-diag' ] || { echo 'Requires the RAM36 cfg80211 router kernel.';exit 1; }
++    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram37-channel1' ] || { echo 'Requires the RAM37 cfg80211 router kernel.';exit 1; }
+     mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+     /etc/init.d/dnsmasq start
+     ( echo 1 > /sys/kernel/c80_wifi/run
+@@ -48,7 +48,7 @@
+     # evidence that a later network operation kept the AP running.
+     sleep 1
+     c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    echo 'hostapd started C80-RAM36 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
++    echo 'hostapd started C80-RAM37 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+     ;;
+ stop)
+     echo 1 > /sys/kernel/c80_wifi/stop || exit 1
