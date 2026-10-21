@@ -155,3 +155,13 @@ OEM blobs и Linux archive подключаются локально. verify-all
 Не запускайте mutating build/package scripts поверх выданного frozen ZIP.
 TFTP deployment прежний: четыре payload-файла, c80-start.txt последним, reboot.
 Проверка: start, diag, поиск C80-RAM36, stop, Finished, diag и report.
+
+## RAM37: канал1
+
+Снимок research/openwrt-ram37-channel1/ добавляет c80_radio.h, один профиль1
+в физическом и QEMU адаптерах, OEM channel/path trace и76 native cases.
+Полный Linux patch теперь32файла; build/source caches отдельно в ../../caches/
+из-за нехватки места /tmp.3700 native,40 QEMU WPA2,13 startup-removal,
+19 OEM ARM cases связаны с конкретными исходниками и kernel artifacts.
+Публичные overrides/ заменяют только локальные templates; OEM/SSH inputs
+по-прежнему нужны локально. Выданный ZIP не пересобирается поверх выпуска.

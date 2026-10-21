@@ -365,6 +365,12 @@
       "source_files": 95,
       "source_bytes": 1116526,
       "snapshot_path": "research/openwrt-ram36-beacon-diag"
+    },
+    {
+      "stage": "openwrt-ram37-channel1",
+      "source_files": 100,
+      "source_bytes": 1147937,
+      "snapshot_path": "research/openwrt-ram37-channel1"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

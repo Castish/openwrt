@@ -20,10 +20,23 @@
   "owner_explicitly_did_not_connect": true,
   "physical_WPA2_handshake_or_CCMP_confirmed": false,
   "live_diag_returned": true,
-  "diag_saved_masks_live_stopped": ["7", "f"],
-  "four_snapshot_guards": [0, 0, 0, 0],
+  "diag_saved_masks_live_stopped": [
+    "7",
+    "f"
+  ],
+  "four_snapshot_guards": [
+    0,
+    0,
+    0,
+    0
+  ],
   "first_three_samples_preserved_after_stop": true,
-  "beacon_raw_low16_before_GTK_after_BMC_after_GTK_before_cleanup": [1, 0, 0, 357],
+  "beacon_raw_low16_before_GTK_after_BMC_after_GTK_before_cleanup": [
+    1,
+    0,
+    0,
+    357
+  ],
   "post_GTK_to_precleanup_us": 36540054,
   "raw_MIB_values_are_not_lifetime_totals": true,
   "precleanup_GTK_BMC_live": true,
@@ -31,13 +44,28 @@
   "AP_active_us": 36566257,
   "AP_starts": 1,
   "AP_stops": 1,
-  "MCU_commands_submitted_completed_acked": [32, 32, 32],
+  "MCU_commands_submitted_completed_acked": [
+    32,
+    32,
+    32
+  ],
   "command_payload_reuses": 9,
   "command_fault": 0,
   "client_connections": 0,
-  "EAPOL_TX_RX": [0, 0],
-  "encrypted_TX_RX": [0, 0],
-  "result_primary_cleanup_critical": [0, 0, 0, 0],
+  "EAPOL_TX_RX": [
+    0,
+    0
+  ],
+  "encrypted_TX_RX": [
+    0,
+    0
+  ],
+  "result_primary_cleanup_critical": [
+    0,
+    0,
+    0,
+    0
+  ],
   "DMA_idle": true,
   "MCU_stopped": true,
   "scheduler_restored": true,
@@ -47,5 +75,29 @@
   "power_cycle_required": false,
   "flash_writes": 0,
   "original_personal_archive_sha256": "35ddfecec613b423cc921cd5a3bc4c7428dead150184621f15a77372fea4b146",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "SSID_visibility_reliable": false,
+  "second_boot_SSID_visible_owner_reported": false,
+  "second_boot_snapshot_beacon_low16": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "second_boot_post_GTK_to_precleanup_us": 241500055,
+  "second_boot_AP_active_us": 241515065,
+  "second_boot_result_primary_cleanup_critical": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "second_boot_MCU_commands_submitted_completed_acked": [
+    32,
+    32,
+    32
+  ],
+  "second_boot_client_connections": 0,
+  "second_boot_MemAvailable_KiB": 10828,
+  "next_experiment": "RAM37 channel1 requested by owner"
 }

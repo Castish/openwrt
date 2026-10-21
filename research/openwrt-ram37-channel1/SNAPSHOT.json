@@ -1,0 +1,21 @@
+{
+  "native_cases": 3700,
+  "new_channel_native_cases": 76,
+  "OEM_ARM_builder_cases": 19,
+  "OEM_ARM_channel_cases": 6,
+  "QEMU_WPA2_checks": 40,
+  "actual_ARM_report_callback_cases": 32,
+  "QEMU_startup_removal_checks": 13,
+  "QEMU_real_Linux_protocol_cases": 13,
+  "QEMU_memory_available_KiB": 6152,
+  "DMA_pool_bytes": 668112,
+  "hostapd_and_nl80211_channel": 1,
+  "frequency_MHz": 2412,
+  "SSID_visibility_fix_claimed": false,
+  "physical_MCU_CCMP_DMA_RF_emulated": false,
+  "snapshot_kind": "Original RAM37 channel1 experiment sources; software verified",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "hardware_tested": false,
+  "original_personal_archive_sha256": "d2b670ae43d5090368800280eab3e1e362869ffb2af91189b207ca6f1e6b7f59",
+  "private_keys_and_OEM_firmware_images_included": false
+}

@@ -1,0 +1,435 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -65,6 +65,17 @@
+     c80_u8 session_peer[6],session_pending_peer[6]; /* CPU-only peer identity. */
+ };
+ struct c80_blob { const c80_u8 *data; c80_u32 bytes; };
++/* CPU-only saved observations. The run thread is the sole MMIO reader;
++ * userspace reads a separately published copy, never device registers. */
++struct c80_beacon_diag_sample {
++    c80_u64 time_us;
++    c80_u32 phase,guard_fault,glo,own,sync,regs[12];
++    c80_u32 gtk,bmc,commands,frame_bytes,tim_offset,capability;
++};
++struct c80_beacon_diag {
++    c80_u32 saved;
++    struct c80_beacon_diag_sample sample[4];
++};
+ struct c80_result;
+ struct c80_io {
+     void *context;
+@@ -95,6 +106,7 @@
+     c80_u32 cfg80211_test; /* AP request/template supplied through nl80211. */
+     c80_u32 session_test; /* Sequential open client sessions; AP stays running. */
+     c80_u32 wpa2_test;
++    void (*beacon_diag)(void *,const struct c80_beacon_diag *);
+     int (*key_fetch)(void *,struct c80_key_request *);
+     void (*key_done)(void *,const struct c80_key_request *,c80_u32);
+     int (*ap_requested)(void *);
+@@ -188,6 +200,7 @@
+     c80_u32 descriptor_buffer[C80_TX_N],reuses,ring_wraps,fault;
+ };
+ struct c80_result {
++    struct c80_beacon_diag beacon_diag;
+     struct c80_security_result security;
+     struct c80_net_result net;
+     struct c80_scheduler_result scheduler;
+@@ -1378,6 +1391,7 @@
+     return 0;
+ }
+ 
++static void c80_beacon_diag_capture(struct c80_io *,struct c80_result *,c80_u32);
+ #include "c80_security_core.h"
+ #include "c80_session_core.h"
+ 
+@@ -1649,6 +1663,23 @@
+ static const c80_u32 c80_state_regs[12]={0x18023080,0x18023110,0x18023130,
+     0x1802b010,0x1802b034,0x1802b030,0x1802b05c,0x18024000,
+     0x1802d000,0x1802d008,0x1802d010,0x180080b0};
++static void c80_beacon_diag_capture(struct c80_io *io,struct c80_result *r,c80_u32 index)
++{
++    struct c80_beacon_diag_sample *s;struct c80_hif_sample guard;c80_u32 i;
++    if(!io->beacon_diag || index>=4) return;
++    s=&r->beacon_diag.sample[index];s->time_us=io->time_us(io->context);
++    s->phase=r->phase;s->gtk=r->security.gtk;s->bmc=r->security.bmc_live;
++    s->commands=r->command_submitted;s->frame_bytes=io->ap_beacon_bytes;
++    s->tim_offset=io->ap_tim_offset;
++    if(io->ap_beacon && io->ap_beacon_bytes>=36) s->capability=c80_get16(io->ap_beacon+34);
++    s->guard_fault=c80_watch_sample(io,&guard);
++    s->glo=guard.glo;s->own=guard.own;s->sync=guard.sync;
++    /* These are the same observed MAC registers as the legacy snapshots.
++     * MIB can clear on read: report raw interval values, never a TX total. */
++    if(!s->guard_fault) for(i=0;i<12;++i) s->regs[i]=c80_read(io,c80_state_regs[i]);
++    r->beacon_diag.saved|=1u<<index;
++    io->beacon_diag(io->context,&r->beacon_diag);
++}
+ static c80_u32 c80_state_capture(struct c80_io *io,struct c80_result *r,c80_u32 index)
+ {
+     struct c80_hif_sample guard; c80_u32 i,bad;
+@@ -1818,6 +1849,9 @@
+                 r->beacon_window_us=r->watch[1].elapsed_us;
+                 r->beacon_window_polls=r->watch[1].samples?r->watch[1].samples-1:0;
+                 if(rc) return rc;
++                /* Capture before PTK/GTK/BMC teardown can change MAC/MIB
++                 * state. Legacy beacon_end is intentionally kept as before. */
++                c80_beacon_diag_capture(io,r,3);
+                 if(io->assoc_reply_test && r->sta_attempted[0] &&
+                    (!io->session_test || r->session.sta_live)) {
+                     if(io->wpa2_test) { rc=c80_security_forget_peer(io,r);if(rc) return rc; }
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -33,6 +33,8 @@
+     struct c80_io io;
+     struct c80_result result;
+     struct mutex lock;
++    spinlock_t beacon_diag_lock;
++    struct c80_beacon_diag beacon_diag;
+     struct kobject *kobj;
+     dma_addr_t dma;
+     struct c80_dma_pool *pool;
+@@ -55,6 +57,12 @@
+     bool net_stop_requested;
+ };
+ static struct c80_linux *c80_live;
++static void c80_linux_beacon_diag(void *context,const struct c80_beacon_diag *snapshot)
++{
++    struct c80_linux *c=context;unsigned long flags;
++    spin_lock_irqsave(&c->beacon_diag_lock,flags);c->beacon_diag=*snapshot;
++    spin_unlock_irqrestore(&c->beacon_diag_lock,flags);
++}
+ #include "c80_net_linux.h"
+ #include "c80_cfg80211.h"
+ static const char *const c80_filenames[6]={
+@@ -185,7 +193,8 @@
+ {
+     struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock); r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n=sysfs_emit(buf,
+         "ran=%u finished=%u result=%d primary=%u cleanup=%u critical=%u phase=%u\n"
+         "ready=%u own_before=%08x own_last=%08x own_sent=%u\n"
+@@ -296,7 +305,8 @@
+     struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n=0; unsigned i;
+     static const char *const names[]={"mac_off_initial","channel","path","mac_on","mac_off_final"};
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock); r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n+=sysfs_emit_at(buf,n,"complete=%u channel=6 band=0 width_mhz=20 tx_streams=1 rx_streams=1 data_tx=%u full_AP_stack=0\n",r->radio_complete,!!r->net.submitted);
+     for(i=0;i<5;++i)
+         n+=sysfs_emit_at(buf,n,"%s attempted=%u valid=%u status=%08x ext=%02x echo=%02x event=%u dma=%u wait_us=%u polls=%u\n",
+@@ -319,8 +329,13 @@
+     struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n=0; unsigned i;
+     static const char *const names[]={"sync_on","beacon_on","beacon_off","sync_off"};
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock); r=&c->result;
+-    n+=sysfs_emit_at(buf,n,"complete=%u SSID=C80-RAM16 channel=6 width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=94 frame_bytes=62 TIM_pos=88 one_client_experiment=1 full_AP_stack=0 TXD_format=3 frame_type=0 subtype=8\n",r->beacon_complete);
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
++    n+=sysfs_emit_at(buf,n,"complete=%u template_source=%s channel=6 width_mhz=20 beacon_TU=100 DTIM=1 rate_mbps=1 template_bytes=%u frame_bytes=%u TIM_pos=%u one_client_experiment=1 full_AP_stack=0 TXD_format=3 frame_type=0 subtype=8\n",
++        r->beacon_complete,c->io.cfg80211_test?"nl80211":"legacy",
++        c->io.cfg80211_test?32+c->io.ap_beacon_bytes:94,
++        c->io.cfg80211_test?c->io.ap_beacon_bytes:62,
++        c->io.cfg80211_test?32+c->io.ap_tim_offset:88);
+     n+=sysfs_emit_at(buf,n,"BSS_BASIC_period_TU=%u/%u BSS_BASIC_DTIM=%u/%u\n",
+         r->bss_period[0],r->bss_period[1],r->bss_dtim[0],r->bss_dtim[1]);
+     for(i=0;i<4;++i)
+@@ -337,7 +352,8 @@
+     static const char *const names[]={"mac_on","sync_on","beacon_begin","beacon_end","sync_off"};
+     struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n=0; unsigned i; const c80_u32 *v;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock); r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n+=sysfs_emit_at(buf,n,"state=1 snapshots=%02x guard_fault=%02x MMIO_config_writes=0 counters_may_clear_on_read=1 tsf_delta_valid=%u tsf_delta_us=%llu\n",
+         r->state_mask,r->state_guard_fault,r->tsf_delta_valid,(unsigned long long)r->tsf_delta_us);
+     for(i=0;i<2;++i)
+@@ -358,7 +374,8 @@
+     struct c80_linux *c=c80_live; struct c80_result *r; ssize_t n=0; unsigned i,j;
+     const struct c80_watch_window *w; const struct c80_hif_sample *s;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock); r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n+=sysfs_emit_at(buf,n,"watch=1 fault_phase=%u control_target_us=30000000 beacon_target_us=%u control_max_samples=30001 beacon_max_samples=%u sample_delay_us=1000 reads_nonatomic=1 auto_reenable=0\n",r->watch_fault_phase,c80_beacon_target(&c->io),c80_beacon_target(&c->io)/1000u+1);
+     for(i=0;i<2;++i) {
+         w=&r->watch[i];
+@@ -377,7 +394,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_result *r;struct c80_management_counts *m;ssize_t n=0;unsigned k,i;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n+=sysfs_emit_at(buf,n,"enabled=%u responses_submitted=%u full_client_stack=0 FCS_verified=0 packet_or_address_saved=0\n",c->io.management_rx_test,r->auth_submitted);
+     for(k=0;k<2;++k) {
+         const char *name=k?"beacon":"control";m=&r->management[k];
+@@ -396,7 +414,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n=sysfs_emit(buf,"recycle=%u packets=%u rearmed=%u publishes=%u cursor=%u last_cpu=%u readback=%u budget_yields=%u\nunmatched=%u short=%u meta_valid=%02x phase=%u PID=%04x EID=%02x sequence=%u extension=%02x event_bytes=%u DMA_bytes=%u payload_saved=0\n",
+         c->io.rx1_rearm_test,r->rx1_packets,r->rx1_rearmed,r->rx1_publishes,r->rx_next[1],r->rx1_last_cpu,r->rx1_readback,r->rx1_budget_yields,
+         r->rx1_unmatched,r->rx1_short,r->rx1_meta_valid,r->rx1_meta_phase,r->rx1_meta_pid,r->rx1_meta_eid,r->rx1_meta_seq,r->rx1_meta_ext,r->rx1_meta_event_bytes,r->rx1_meta_dma_bytes);
+@@ -407,7 +426,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n=sysfs_emit(buf,"enabled=%u maximum_responses=1 captured=%u submitted=%u dma_header_done=%u duplicate_skipped=%u late_skipped=%u\n"
+         "ring_saved=%u touched=%u programmed=%u restore_bad=%x CPU_readback=%u DMA_index=%u ctrl=%08x polls=%u wait_us=%u\n"
+         "pre_submit_BASE=%08x MAX=%u\nring_before=%08x/%08x/%08x/%08x after=%08x/%08x/%08x/%08x\n"
+@@ -423,7 +443,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n=0;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n+=sysfs_emit_at(buf,n,"enabled=%u RX1_types=%u/%u/%u/%u/%u/%u/%u/%u non_event=%u unknown=%u\n",
+         c->io.rx1_packet_test,r->rx1_type[0],r->rx1_type[1],r->rx1_type[2],r->rx1_type[3],r->rx1_type[4],r->rx1_type[5],r->rx1_type[6],r->rx1_type[7],r->rx1_non_event,r->rx1_unknown);
+     n+=sysfs_emit_at(buf,n,"last_non_event_type=%u DMA_bytes=%u DW0=%08x\n",r->rx1_last_type,r->rx1_last_bytes,r->rx1_last_dw0);
+@@ -438,7 +459,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n=0;unsigned i;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n+=sysfs_emit_at(buf,n,"enabled=%u maximum_responses=1 captured=%u duplicate=%u late=%u request_bad=%u cap=%04x listen=%u CCK_mask=%x\n",
+         c->io.assoc_reply_test,r->assoc_captured,r->assoc_duplicate,r->assoc_late,r->assoc_request_bad,r->assoc_request_cap,r->assoc_listen,r->assoc_rate_mask);
+     for(i=0;i<2;++i) n+=sysfs_emit_at(buf,n,"STA_%s attempted=%u valid=%u status=%08x echo=%02x ext=%02x event=%u DMA=%u tail=%u wait_us=%u polls=%u meta=%u BSS=%u WCID=%u TLVs=%u MUAR=%u\n",
+@@ -455,7 +477,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n=0;unsigned int i;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);r=&c->result;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
+     n+=sysfs_emit_at(buf,n,"enabled=%u endpoint=192.168.2.1 client=192.168.2.2 max_ARP=1 max_ICMP=1 ICMP_payload_max=64\n",c->io.data_echo_test);
+     n+=sysfs_emit_at(buf,n,"seen=%u raw=%u translated=%u bad_length=%u bad_status=%u wrong_peer=%u bad_format=%u bad_LLC=%u\n",r->data_seen,r->data_raw,r->data_translated,r->data_bad_length,r->data_bad_status,r->data_wrong_peer,r->data_bad_format,r->data_bad_llc);
+     n+=sysfs_emit_at(buf,n,"ARP=%u target=%u IPv4=%u ICMP=%u DHCP_port_candidates=%u other=%u bad_protocol=%u bad_checksum=%u late=%u\n",r->data_arp,r->data_arp_target,r->data_ipv4,r->data_icmp,r->data_dhcp_candidates,r->data_other,r->data_bad_protocol,r->data_bad_checksum,r->data_late);
+@@ -468,7 +491,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_scheduler_result *s;ssize_t n;c80_u32 i;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);s=&c->result.scheduler;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    s=&c->result.scheduler;
+     n=sysfs_emit(buf,"enabled=%u saved=%u applied=%u touched=%04x read_bad=%04x program_bad=%04x guard_bad=%04x restore_bad=%04x restored=%u restore_refused=%u active_valid=%u failure_valid=%u\n",
+         c->io.scheduler_test,s->saved,s->applied,s->touched,s->read_bad,s->program_bad,s->guard_bad,s->restore_bad,s->restored,s->restore_refused,s->active_valid,s->failure_valid);
+     n+=sysfs_emit_at(buf,n,"OEM_callback=40308c4c generic_QM=0 active_ring_cells=128 timeout_us=1000000\nregister before wanted programmed active failure after\n");
+@@ -480,7 +504,8 @@
+ {
+     struct c80_linux *c=c80_live;struct c80_net_result *n;ssize_t len;
+     if(!c) return -ENODEV;
+-    mutex_lock(&c->lock);n=&c->result.net;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    n=&c->result.net;
+     len=sysfs_emit(buf,
+         "enabled=%u prepared=%u linked=%u closed=%u exhausted=%u stop_requested=%u name=c80wlan0 MTU=1400 ring_cells=%u\n"
+         "submitted=%u headers=%u returned=%u completed=%u inflight=%u early_tokens=%u duplicate_tokens=%u TX_rejected=%u\n"
+@@ -620,6 +645,28 @@
+         READ_ONCE(s->extension),READ_ONCE(s->valid),READ_ONCE(s->status));
+ }
+ static struct kobj_attribute security_attr=__ATTR_RO(security);
++static ssize_t beacon_diag_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    static const char *const names[]={"before_GTK_prepare","after_BMC_init","after_GTK_install","before_security_cleanup"};
++    struct c80_linux *c=c80_live;struct c80_beacon_diag snapshot;
++    unsigned long flags;unsigned i;ssize_t n=0;
++    if(!c) return -ENODEV;
++    spin_lock_irqsave(&c->beacon_diag_lock,flags);snapshot=c->beacon_diag;
++    spin_unlock_irqrestore(&c->beacon_diag_lock,flags);
++    n+=sysfs_emit_at(buf,n,"saved=%x MMIO_on_read=0 raw_MIB_may_clear_on_capture=1 RF_TX_unproven=1\n",snapshot.saved);
++    for(i=0;i<4;++i) {
++        const struct c80_beacon_diag_sample *s=&snapshot.sample[i];const u32 *v=s->regs;
++        n+=sysfs_emit_at(buf,n,"%s valid=%u phase=%u us=%llu guard=%x GTK=%u BMC=%u commands=%u frame_bytes=%u template_bytes=%u TIM_offset=%u capability=%04x\n",
++            names[i],!!(snapshot.saved&BIT(i)),s->phase,s->time_us,s->guard_fault,s->gtk,s->bmc,s->commands,
++            s->frame_bytes,s->frame_bytes?32+s->frame_bytes:0,s->tim_offset,s->capability);
++        n+=sysfs_emit_at(buf,n,"%s glo=%08x own=%08x sync=%08x arb_scr=%08x tqsm=%08x tqfm=%08x t0cr=%08x t0tpcr=%08x pisr=%08x mptcr=%08x tmac=%08x\n",
++            names[i],s->glo,s->own,s->sync,v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7]);
++        n+=sysfs_emit_at(buf,n,"%s mib_scr0=%08x mib_scr1=%08x mib_sdr0=%08x bcn_low16=%u ple_empty=%08x\n",
++            names[i],v[8],v[9],v[10],v[10]&0xffff,v[11]);
++    }
++    return n;
++}
++static struct kobj_attribute beacon_diag_attr=__ATTR_RO(beacon_diag);
+ static struct kobj_attribute session_attr=__ATTR_RO(session);
+ static struct kobj_attribute stop_attr=__ATTR(stop,0200,NULL,stop_store);
+ static struct kobj_attribute netdev_attr=__ATTR_RO(netdev);
+@@ -636,8 +683,56 @@
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&security_attr.attr,&session_attr.attr,&control_attr.attr,&stop_attr.attr,&scheduler_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&beacon_diag_attr.attr,&security_attr.attr,&session_attr.attr,&control_attr.attr,&stop_attr.attr,&scheduler_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
++
++#if IS_ENABLED(CONFIG_C80_NET_SELFTEST)
++/* Execute the real show callbacks with the run mutex held. Only built into
++ * the QEMU image; no physical device, firmware, keys or MMIO is involved. */
++int c80_report_lock_selftest(void);
++int c80_report_lock_selftest(void)
++{
++    ssize_t (*const reports[])(struct kobject *,struct kobj_attribute *,char *)={
++        status_show,radio_show,beacon_show,state_show,watch_show,mgmt_show,
++        events_show,reply_show,completion_show,association_show,data_show,
++        scheduler_show,netdev_show};
++    ssize_t (*const live[])(struct kobject *,struct kobj_attribute *,char *)={
++        control_show,security_show,session_show,beacon_diag_show};
++    struct c80_linux *c,*saved=c80_live;struct c80_beacon_diag snapshot={};char *buf;
++    unsigned i,cases=0;int rc=-EINVAL;
++    /* late_initcall runs before /init and before any userspace run request.
++     * QEMU also maps an inactive C80 DT node; preserve that driver's context.
++     * Device IRQ handlers use dev_id, never the temporary report pointer. */
++    if(!IS_ENABLED(CONFIG_ARCH_VIRT) || (saved && READ_ONCE(saved->ran))) return -EBUSY;
++    c=kzalloc(sizeof(*c),GFP_KERNEL);buf=(char *)get_zeroed_page(GFP_KERNEL);
++    if(!c || !buf) { rc=-ENOMEM;goto out; }
++    mutex_init(&c->lock);spin_lock_init(&c->beacon_diag_lock);c80_live=c;
++    for(i=0;i<ARRAY_SIZE(reports);++i) {
++        ssize_t n;
++        mutex_lock(&c->lock);n=reports[i](NULL,NULL,buf);mutex_unlock(&c->lock);
++        if(n!=-EBUSY) goto restore;
++        ++cases;n=reports[i](NULL,NULL,buf);
++        if(n<=0 || n>=PAGE_SIZE) goto restore;
++        ++cases;
++    }
++    for(i=0;i<ARRAY_SIZE(live);++i) {
++        ssize_t n;
++        mutex_lock(&c->lock);n=live[i](NULL,NULL,buf);mutex_unlock(&c->lock);
++        if(n<=0 || n>=PAGE_SIZE) goto restore;
++        ++cases;
++    }
++    snapshot.saved=7;snapshot.sample[2].time_us=0x1122334455667788ull;
++    snapshot.sample[2].frame_bytes=96;snapshot.sample[2].capability=0x11;
++    c80_linux_beacon_diag(c,&snapshot);
++    if(memcmp(&snapshot,&c->beacon_diag,sizeof(snapshot))) goto restore;
++    ++cases;
++    mutex_lock(&c->lock);beacon_diag_show(NULL,NULL,buf);mutex_unlock(&c->lock);
++    if(!strstr(buf,"saved=7 MMIO_on_read=0") || !strstr(buf,"frame_bytes=96 template_bytes=128")) goto restore;
++    ++cases;pr_info("PASS C80 REPORT LOCK %u actual ARM callback cases\n",cases);rc=0;
++restore:c80_live=saved;
++out:if(buf) free_page((unsigned long)buf);kfree(c);return rc;
++}
++#endif
+ 
+ static int c80_mcu_probe(struct platform_device *pdev)
+ {
+@@ -659,7 +754,7 @@
+             return dev_err_probe(&pdev->dev,-EINVAL,"EMI has a cacheable linear RAM alias\n");
+     c=devm_kzalloc(&pdev->dev,sizeof(*c),GFP_KERNEL);
+     if(!c) return -ENOMEM;
+-    c->dev=&pdev->dev;c->wpa2=true; mutex_init(&c->lock); raw_spin_lock_init(&c->irq_lock);spin_lock_init(&c->net_lock);skb_queue_head_init(&c->net_queue);
++    c->dev=&pdev->dev;c->wpa2=true; spin_lock_init(&c->beacon_diag_lock);mutex_init(&c->lock); raw_spin_lock_init(&c->irq_lock);spin_lock_init(&c->net_lock);skb_queue_head_init(&c->net_queue);
+     for(i=0;i<ARRAY_SIZE(c->windows);++i) {
+         res=platform_get_resource(pdev,IORESOURCE_MEM,i);
+         if(!res || res->start!=expected_base[i] ||
+@@ -676,7 +771,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.cfg80211_test=1,.session_test=1,.wpa2_test=1,.key_fetch=c80_linux_key_fetch,.key_done=c80_linux_key_done,.ap_requested=c80_linux_ap_requested,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.cfg80211_test=1,.session_test=1,.wpa2_test=1,.beacon_diag=c80_linux_beacon_diag,.key_fetch=c80_linux_key_fetch,.key_done=c80_linux_key_done,.ap_requested=c80_linux_ap_requested,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
+--- a/c80_net_selftest.c
++++ b/c80_net_selftest.c
+@@ -118,12 +118,14 @@
+ static struct kobj_attribute control_attr=__ATTR_RO(control);
+ static const struct bin_attribute inject_attr=__BIN_ATTR(inject,0200,NULL,inject_write,C80_NET_ETH_MAX);
+ static const struct bin_attribute capture_attr=__BIN_ATTR(capture,0400,capture_read,NULL,0);
++extern int c80_report_lock_selftest(void);
+ static int __init c80_selftest_init(void)
+ {
+     static const u8 peer[6]={0x02,0xc0,0x80,0x28,0,2};
+     static const u8 mac[6]={0x02,0xc0,0x80,0x28,0x00,0x01};
+     struct platform_device *pdev;struct c80_selftest *s;int rc;
+     if(!IS_ENABLED(CONFIG_ARCH_VIRT)) return -ENODEV;
++    rc=c80_report_lock_selftest();if(rc) return rc;
+     pdev=platform_device_register_simple("c80-net-selftest",-1,NULL,0);
+     if(IS_ERR(pdev)) return PTR_ERR(pdev);
+     s=kzalloc(sizeof(*s),GFP_KERNEL);if(!s) { rc=-ENOMEM;goto device; }
+--- a/c80_security_core.h
++++ b/c80_security_core.h
+@@ -90,13 +90,18 @@
+             if((pair || req.index==s->gtk_index) && c80_security_key_equal(saved,req.key)) ++s->key_idempotent;
+             else refused=1;
+         } else {
+-            if(!pair && !s->bmc_live) rc=c80_security_bmc(io,r,0);
++            if(!pair) c80_beacon_diag_capture(io,r,0);
++            if(!pair && !s->bmc_live) {
++                rc=c80_security_bmc(io,r,0);
++                if(!rc) c80_beacon_diag_capture(io,r,1);
++            }
+             if(!rc) rc=c80_security_key(io,r,pair?1:0,req.index,req.key,0);
+             if(!rc) {
+                 for(i=0;i<16;++i) saved[i]=req.key[i];
+                 if(pair) { s->ptk=1;c80_secret_clear(s->rx_pn,sizeof(s->rx_pn)); }
+                 else { s->gtk=1;s->gtk_index=req.index; }
+                 ++s->key_adds;
++                if(!pair) c80_beacon_diag_capture(io,r,2);
+             }
+         }
+     } else if(req.operation==C80_KEY_DEL) {
+--- a/rootfs/etc/c80-hostapd.conf
++++ b/rootfs/etc/c80-hostapd.conf
+@@ -14,7 +14,7 @@
+ logger_stdout_level=2
+ interface=c80wlan0
+ ctrl_interface=/var/run/c80-hostapd
+-ssid=C80-RAM35
++ssid=C80-RAM36
+ dtim_period=1
+ wmm_enabled=0
+ auth_algs=1
+--- a/rootfs/usr/sbin/c80-wifi
++++ b/rootfs/usr/sbin/c80-wifi
+@@ -2,7 +2,7 @@
+ . /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+ case "${1:-}" in
+ start)
+-    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram35-netup' ] || { echo 'Requires the RAM35 cfg80211 router kernel.';exit 1; }
++    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram36-beacon-diag' ] || { echo 'Requires the RAM36 cfg80211 router kernel.';exit 1; }
+     mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+     /etc/init.d/dnsmasq start
+     ( echo 1 > /sys/kernel/c80_wifi/run
+@@ -48,7 +48,7 @@
+     # evidence that a later network operation kept the AP running.
+     sleep 1
+     c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    echo 'hostapd started C80-RAM35 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
++    echo 'hostapd started C80-RAM36 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+     ;;
+ stop)
+     echo 1 > /sys/kernel/c80_wifi/stop || exit 1
+@@ -63,16 +63,19 @@
+     cat /sys/kernel/c80_wifi/session
+     iw dev 2>/dev/null
+     ;;
++diag)
++    cat /sys/kernel/c80_wifi/control /sys/kernel/c80_wifi/beacon_diag
++    ;;
+ report)
+     if [ ! -e /tmp/c80-wifi-once/finished ];then echo 'Use status until Finished.';exit 1;fi
+     uname -r
+     cat /tmp/c80-wifi-once/run.log
+     logread -e hostapd
+     cat /sys/kernel/c80_wifi/control
+-    for f in security session status scheduler netdev completion association;do cat /sys/kernel/c80_wifi/$f;done
++    for f in beacon_diag security session status scheduler netdev completion association;do cat /sys/kernel/c80_wifi/$f;done
+     ifconfig c80wlan0 2>/dev/null
+     ubus call network.interface.wifi_ram status
+     free
+     ;;
+-*) echo 'Usage: c80-wifi start|status|stop|report';exit 1;;
++*) echo 'Usage: c80-wifi start|status|diag|stop|report';exit 1;;
+ esac
