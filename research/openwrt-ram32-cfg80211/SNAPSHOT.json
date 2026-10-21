@@ -1,7 +1,7 @@
 {
   "snapshot_kind": "Original RAM32 source exported after software verification",
   "source_files_byte_identical_to_workspace": true,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "baseline_native_cases": 2591,
   "new_native_control_cases": 652,
   "QEMU_real_cfg80211_nl80211_hostapd_commands": [
@@ -16,5 +16,34 @@
   "source_entries_restored": 86722,
   "rootfs_entries_restored": 600,
   "original_private_archive_sha256": "79b3bbe5cbe71717f9f279f3bdb5438ab20c79f7365a7d1ff918ed87553ba073",
-  "private_keys_and_OEM_firmware_images_included": false
+  "private_keys_and_OEM_firmware_images_included": false,
+  "hardware_tested_at_source_export": false,
+  "hardware_validation": {
+    "report_received_date": "2026-10-21",
+    "timezone": "Europe/Moscow",
+    "source": "owner-reported physical router and Windows outputs",
+    "file": "VALIDATION.md",
+    "one_open_AP_client_session": true,
+    "hostapd_cfg80211_start_association_stop_passed": true,
+    "ping_32_bytes": {
+      "sent": 20,
+      "received": 20,
+      "lost": 0
+    },
+    "ping_DF_1372_bytes": {
+      "sent": 3,
+      "received": 3,
+      "lost": 0
+    },
+    "TCP22_passed": true,
+    "result": 0,
+    "cleanup": 0,
+    "critical": 0,
+    "DMA_idle": true,
+    "MCU_stopped": true,
+    "data_completed": 44,
+    "data_inflight": 0,
+    "ownership_faults": 0,
+    "multiple_clients_or_WPA2_or_reassociation_tested": false
+  }
 }

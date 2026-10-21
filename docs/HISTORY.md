@@ -58,11 +58,9 @@
 | [uboot-autoboot-v1](../research/uboot-autoboot-v1/) | Сохранённая проба RAM-wrapper; затем заменена native U-Boot | 13 |
 | [uboot-native-netboot-v1](../research/uboot-native-netboot-v1/) | Реальная модификация нормального U-Boot; AutoTFTP и LAN1 SSH подтверждены | 19 |
 | [ssh-identity-v1](../research/ssh-identity-v1/) | Шаблон индивидуальной постоянной SSH-конфигурации; работа подтверждена владельцем | 14 |
-
 | [cloud-host-setup](../research/cloud-host-setup/) | Исходные скрипты и версии пакетов подготовки облачной среды | 5 |
 | [wifi-bringup](../research/wifi-bringup/) | Статический анализ формата трёхрегионной Wi-Fi firmware | 1 |
-
-| [openwrt-ram32-cfg80211](../research/openwrt-ram32-cfg80211/) | cfg80211/nl80211 + штатный hostapd; программные проверки прошли, аппаратный тест ожидается | 72 |
+| [openwrt-ram32-cfg80211](../research/openwrt-ram32-cfg80211/) | cfg80211/nl80211 + штатный hostapd; AP/клиент/IP/TCP22/чистая остановка подтверждены на плате | 72 |
 
 ## Подтверждённый рубеж RAM31
 
@@ -72,4 +70,4 @@ Windows через Wi-Fi192.168.2.2:5000 отправлено/4999 получе�
 
 ## Текущий следующий этап
 
-RAM32 подготовлена: стандартный cfg80211/nl80211 контроль и штатный hostapd для открытой AP, с сохранением транспорта RAM31 и персональных SSH-настроек. Пройдены2591 базовый+652 новых ASan/UBSan сценария,30+33 QEMU-команды настоящего cfg80211/hostapd и4 SSH-входа с закреплённой идентичностью. Радио/MCU/DMA в QEMU не эмулируются. Аппаратная проверка RAM32 ожидается; WPA2, повторная ассоциация и несколько клиентов ещё не реализованы.
+RAM32 подготовлена: стандартный cfg80211/nl80211 контроль и штатный hostapd для открытой AP, с сохранением транспорта RAM31 и персональных SSH-настроек. Пройдены2591 базовый+652 новых ASan/UBSan сценария,30+33 QEMU-команды настоящего cfg80211/hostapd и4 SSH-входа с закреплённой идентичностью. Радио/MCU/DMA в QEMU не эмулируются. Аппаратная проверка RAM32 пройдена21 октября2026 по времени Москвы: hostapd AP-ENABLED/AP-STA-CONNECTED,iw authorized/authenticated/associated,20/20 обычных и3/3 DF1372 ping,TCP22. Остановка AP/DMA/MCU прошла сresult/cleanup/critical=0;44/44 paireddataTX,inflight0,faults0. Подробности: [VALIDATION.md](../research/openwrt-ram32-cfg80211/VALIDATION.md). WPA2,повторная ассоциация и несколько клиентов ещё не реализованы. Двойной service delete/Not found отмечен как исправление помощника для следующей версии.
