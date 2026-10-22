@@ -1,0 +1,149 @@
+{
+  "passed": true,
+  "release": "C80 OpenWrt RAM41 high-resolution timer trial",
+  "kernel": "6.12.113-c80-openwrt-ram41-hires",
+  "layout": {
+    "build": {
+      "entry": "40208000",
+      "high_end": "40b77678",
+      "auth_initrd_start": "40d00000"
+    },
+    "build-qemu": {
+      "entry": "40208000",
+      "high_end": "40c777f8",
+      "auth_initrd_start": "40d00000"
+    }
+  },
+  "changed_production_driver_sources": [],
+  "unchanged_production_driver_sources": [
+    "c80_cfg80211.h",
+    "c80_key_linux.h",
+    "c80_mcu_core.h",
+    "c80_mcu_transport.c",
+    "c80_net_core.h",
+    "c80_net_linux.h",
+    "c80_net_selftest.c",
+    "c80_net_types.h",
+    "c80_radio.h",
+    "c80_restart.c",
+    "c80_rsn.h",
+    "c80_security_core.h",
+    "c80_security_parse.h",
+    "c80_security_types.h",
+    "c80_session_core.h"
+  ],
+  "kernel_config_changes": {
+    "build": {
+      "CONFIG_HIGH_RES_TIMERS": {
+        "before": null,
+        "after": "y"
+      },
+      "CONFIG_INITRAMFS_SOURCE": {
+        "before": "\"/workspace/.openwrt-onboarding/research/openwrt-ram40-rx-status/initramfs.list\"",
+        "after": "\"/workspace/.openwrt-onboarding/research/openwrt-ram41-hires/initramfs.list\""
+      },
+      "CONFIG_LOCALVERSION": {
+        "before": "\"-c80-openwrt-ram40-rx-status\"",
+        "after": "\"-c80-openwrt-ram41-hires\""
+      },
+      "CONFIG_SCHED_HRTICK": {
+        "before": null,
+        "after": "y"
+      },
+      "CONFIG_TICK_ONESHOT": {
+        "before": null,
+        "after": "y"
+      }
+    },
+    "build-qemu": {
+      "CONFIG_HIGH_RES_TIMERS": {
+        "before": null,
+        "after": "y"
+      },
+      "CONFIG_INITRAMFS_SOURCE": {
+        "before": "\"/workspace/.openwrt-onboarding/research/openwrt-ram40-rx-status/initramfs-qemu.list\"",
+        "after": "\"/workspace/.openwrt-onboarding/research/openwrt-ram41-hires/initramfs-qemu.list\""
+      },
+      "CONFIG_LOCALVERSION": {
+        "before": "\"-c80-openwrt-ram40-qemu-check\"",
+        "after": "\"-c80-openwrt-ram41-qemu-check\""
+      },
+      "CONFIG_SCHED_HRTICK": {
+        "before": null,
+        "after": "y"
+      },
+      "CONFIG_TICK_ONESHOT": {
+        "before": null,
+        "after": "y"
+      }
+    }
+  },
+  "HIGH_RES_TIMERS": true,
+  "HZ": 100,
+  "radio_rate_Mbps": 1,
+  "channel": 1,
+  "MTU": 1400,
+  "WPA2_CCMP_policy_and_MCU_DMA_packet_code_unchanged": true,
+  "native_cases_fresh": 0,
+  "native_cases_inherited": 3871,
+  "native_source_identity_verified": true,
+  "all_native_suites_rerun": false,
+  "parent_OEM_ARM_cases_inherited_not_rerun": 23,
+  "fresh_QEMU_WPA2_checks": 48,
+  "fresh_QEMU_timer_checks": 10,
+  "fresh_QEMU_timer_samples": 128,
+  "QEMU_timer_comparison": {
+    "parent": {
+      "monotonic_res_ns": 10000000,
+      "realtime_res_ns": 10000000,
+      "requested_sleep_ns": 1000000,
+      "samples": 64,
+      "min_ns": 3276560,
+      "mean_ns": 9876813,
+      "max_ns": 10434624,
+      "interrupted": 0,
+      "peripheral_access": 0
+    },
+    "hires": {
+      "monotonic_res_ns": 1,
+      "realtime_res_ns": 1,
+      "requested_sleep_ns": 1000000,
+      "samples": 64,
+      "min_ns": 1181776,
+      "mean_ns": 1597544,
+      "max_ns": 7010336,
+      "interrupted": 0,
+      "peripheral_access": 0
+    }
+  },
+  "QEMU_WiFi_RTT_or_physical_radio_measurement": false,
+  "fresh_QEMU_startup_removal_checks": 13,
+  "actual_ARM_report_callback_cases": 32,
+  "QEMU_real_Linux_protocol_cases": 13,
+  "QEMU_memory_available_KiB": 6592,
+  "fresh_decompressor_checks": 6,
+  "fresh_handoff_checks": 5,
+  "fresh_restart_checks": 8,
+  "rootfs_changed": [
+    "etc/c80-hostapd.conf",
+    "usr/sbin/c80-wifi"
+  ],
+  "rootfs_added": [
+    "usr/sbin/c80-timer-check"
+  ],
+  "ELF_files": 67,
+  "signed_packages_unchanged": 45,
+  "DMA_pool_bytes": 668112,
+  "full_patch_files": 32,
+  "full_source_entries_restored": 86729,
+  "Linux_patch_byte_identical_to_RAM40": true,
+  "Windows_comparison_script_byte_identical_to_RAM40": true,
+  "helper_guard_matches_kernel": true,
+  "new_NOR_or_UBoot_write_required": false,
+  "hardware_tested": false,
+  "physical_MCU_CCMP_DMA_RF_emulated": false,
+  "snapshot_kind": "Original high-resolution timer trial with unchanged RAM40 network driver sources",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "original_personal_archive_sha256": "eaa4f485357646652f7fa4db8f0557481e300e66f20786b7180ecddce94c525c",
+  "private_keys_binary_images_OEM_inputs_included": false
+}

@@ -1,0 +1,164 @@
+--- a/minimal.config
++++ b/minimal.config
+@@ -1,4 +1,4 @@
+-CONFIG_LOCALVERSION="-c80-openwrt-ram40-rx-status"
++CONFIG_LOCALVERSION="-c80-openwrt-ram41-hires"
+ CONFIG_LOCALVERSION_AUTO=n
+ CONFIG_EXPERT=y
+ CONFIG_EMBEDDED=y
+@@ -29,6 +29,7 @@
+ CONFIG_CPU_IDLE=n
+ CONFIG_CPU_FREQ=n
+ CONFIG_HZ_100=y
++CONFIG_HIGH_RES_TIMERS=y
+ CONFIG_PREEMPT_NONE=y
+ CONFIG_ARM_ARCH_TIMER=y
+ CONFIG_ARM_ARCH_TIMER_EVTSTREAM=n
+--- a/rootfs/etc/c80-hostapd.conf
++++ b/rootfs/etc/c80-hostapd.conf
+@@ -14,7 +14,7 @@
+ logger_stdout_level=2
+ interface=c80wlan0
+ ctrl_interface=/var/run/c80-hostapd
+-ssid=C80-RAM40
++ssid=C80-RAM41
+ dtim_period=1
+ wmm_enabled=0
+ auth_algs=1
+--- a/rootfs/usr/sbin/c80-wifi
++++ b/rootfs/usr/sbin/c80-wifi
+@@ -2,7 +2,7 @@
+ . /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+ case "${1:-}" in
+ start)
+-    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram40-rx-status' ] || { echo 'Requires the RAM40 cfg80211 router kernel.';exit 1; }
++    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram41-hires' ] || { echo 'Requires the RAM41 cfg80211 router kernel.';exit 1; }
+     mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+     /etc/init.d/dnsmasq start
+     ( echo 1 > /sys/kernel/c80_wifi/run
+@@ -48,7 +48,7 @@
+     # evidence that a later network operation kept the AP running.
+     sleep 1
+     c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    echo 'hostapd started C80-RAM40 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
++    echo 'hostapd started C80-RAM41 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+     ;;
+ stop)
+     echo 1 > /sys/kernel/c80_wifi/stop || exit 1
+@@ -69,6 +69,7 @@
+ report)
+     if [ ! -e /tmp/c80-wifi-once/finished ];then echo 'Use status until Finished.';exit 1;fi
+     uname -r
++    /usr/sbin/c80-timer-check
+     cat /tmp/c80-wifi-once/run.log
+     logread -e hostapd
+     cat /sys/kernel/c80_wifi/control
+--- /dev/null
++++ b/c80_timer_check.c
+@@ -0,0 +1,82 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Read ordinary Linux clock resolution and sample 64 one-millisecond sleeps.
++ * No peripheral access, CPU affinity changes, real-time priority or busy wait.
++ * ARM EABI syscalls avoid introducing another target libc dependency. */
++typedef unsigned long long u64;
++struct time32 { int sec, nsec; };
++static int syscall3(unsigned nr, unsigned a, unsigned b, unsigned c)
++{
++    register unsigned r0 __asm__("r0")=a, r1 __asm__("r1")=b;
++    register unsigned r2 __asm__("r2")=c, r7 __asm__("r7")=nr;
++    __asm__ volatile("svc 0" : "+r"(r0) : "r"(r1),"r"(r2),"r"(r7) : "memory","cc");
++    return (int)r0;
++}
++static int text(const char *s)
++{
++    unsigned n=0,done=0;int rc;
++    while(s[n])++n;
++    while(done<n) {
++        rc=syscall3(4,1,(unsigned)(s+done),n-done);
++        if(rc==-4)continue;
++        if(rc<=0)return 1;
++        done+=(unsigned)rc;
++    }
++    return 0;
++}
++static int number(u64 value)
++{
++    char buf[21];unsigned count=0;
++    buf[20]=0;
++    do { buf[19-count]=(char)('0'+value%10);value/=10;++count; } while(value);
++    return text(buf+20-count);
++}
++static int field(const char *name,u64 value)
++{ return text(name)||number(value); }
++static int time_value(unsigned clock,struct time32 *t,unsigned nr)
++{
++    int rc=syscall3(nr,clock,(unsigned)t,0);
++    return rc || t->sec<0 || t->nsec<0 || t->nsec>=1000000000;
++}
++static u64 ns(const struct time32 *t)
++{ return (u64)(unsigned)t->sec*1000000000ull+(unsigned)t->nsec; }
++static int fail(const char *why)
++{ text("FAIL C80 TIMER ");text(why);text("\n");return 1; }
++/* The freestanding libgcc division helper otherwise calls libc raise(). */
++__attribute__((noreturn)) long long __aeabi_ldiv0(long long unused)
++{
++    (void)unused;fail("division by zero");syscall3(1,1,0,0);
++    for(;;) { }
++}
++int main(void)
++{
++    struct time32 mono,real,before,after,request,remaining;
++    u64 minimum=~0ull,maximum=0,total=0,delta;
++    unsigned samples=64,interruptions=0;int rc;
++    if(time_value(1,&mono,264)||time_value(0,&real,264))return fail("clock_getres");
++    if(!ns(&mono)||!ns(&real))return fail("zero clock resolution");
++    for(unsigned i=0;i<samples;++i) {
++        request.sec=0;request.nsec=1000000;
++        if(time_value(1,&before,263))return fail("clock_gettime before");
++        for(;;) {
++            rc=syscall3(162,(unsigned)&request,(unsigned)&remaining,0);
++            if(!rc)break;
++            if(rc!=-4||++interruptions>64)return fail("nanosleep");
++            if(remaining.sec<0||remaining.nsec<0||remaining.nsec>=1000000000)return fail("remaining interval");
++            request=remaining;
++        }
++        if(time_value(1,&after,263)||ns(&after)<ns(&before))return fail("monotonic clock");
++        delta=ns(&after)-ns(&before);
++        if(delta<1000000)return fail("early sleep return");
++        total+=delta;
++        if(delta<minimum)minimum=delta;
++        if(delta>maximum)maximum=delta;
++    }
++    if(text("C80 timers v1 ")||field("monotonic_res_ns=",ns(&mono))||
++       field(" realtime_res_ns=",ns(&real))||field(" requested_sleep_ns=",1000000)||
++       field(" samples=",samples)||field(" min_ns=",minimum)||
++       field(" mean_ns=",total/samples)||field(" max_ns=",maximum)||
++       field(" interrupted=",interruptions)||text(" peripheral_access=0\n"))return 1;
++    return 0;
++}
++__attribute__((naked,noreturn)) void _start(void)
++{ __asm__ volatile("bl main\nmov r7,#1\nsvc 0\nb ."); }
+--- /dev/null
++++ b/build-timer-check.py
+@@ -0,0 +1,21 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: MIT
++"""Build a freestanding ARM timer diagnostic for the physical and QEMU rootfs."""
++from pathlib import Path
++import hashlib,json,os,subprocess
++root=Path(__file__).resolve().parent
++cross=root.parent/'linux-bringup/tools/usr/bin/arm-linux-gnueabi-gcc'
++env=dict(os.environ)
++env['LD_LIBRARY_PATH']=str(root.parent/'linux-bringup/tools/usr/lib/x86_64-linux-gnu')+':'+env.get('LD_LIBRARY_PATH','')
++out=root/'rootfs/usr/sbin/c80-timer-check'
++command=[str(cross),'-mcpu=cortex-a7','-marm','-mfloat-abi=soft','-Os','-Wall','-Wextra','-Werror',
++         '-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-pie','-no-pie','-nostdlib','-static',
++         '-Wl,--build-id=none','-Wl,-e,_start',str(root/'c80_timer_check.c'),'-lgcc','-o',str(out)]
++subprocess.run(command,env=env,check=True)
++out.chmod(0o755)
++sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
++record={'passed':True,'source_sha256':sha(root/'c80_timer_check.c'),'binary_sha256':sha(out),
++        'binary_bytes':out.stat().st_size,'command':command,'static_no_target_libc':True,
++        'peripheral_access':False,'changes_scheduling_or_CPU_frequency':False}
++(root/'evidence/timer-diagnostic-build.json').write_text(json.dumps(record,indent=2)+'\n')
++print(json.dumps(record,indent=2))

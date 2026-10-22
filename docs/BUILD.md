@@ -197,3 +197,18 @@ verify-gtk-refresh.sh исполняет текущий core и старый RAM
 ## RAM40: RX management status trial
 
 Полный Linux patch32файла, ram39-to-ram40.patch, verify-management-status.sh и verify-artifacts.py связывают новые RX правила, 118новых/3871freshnative cases и exact kernel/helper version. QEMU48checks (включая5actualhelperguards),13removalchecks; подлинные RF/MCU/CCMP эффекты не эмулируются. Диагностика в mgmt включена в helper report. Персональный комплект загружается прежним autoTFTP через четыре payloads и c80-start.txt последним.
+
+## RAM41: high-resolution timer trial
+
+research/openwrt-ram41-hires/ содержит прежний полный32-файловый Linux-патч
+и исходники драйверов RAM40. minimal.config включает HIGH_RES_TIMERS при
+HZ100; обе конфигурации дополнительно выбирают TICK_ONESHOT/SCHED_HRTICK.
+build-kernel.sh собирает c80-timer-check до генерации initramfs. Helper
+использует ARM EABI clock_getres/clock_gettime/nanosleep, не имеет новой libc
+и не обращается к периферии. verify-qemu-timers.py проверяет тот же бинарник
+на неизменном родительском ядре (--parent) и новом ядре. QEMU-запуски должны
+выполняться последовательно: используют один локальный порт40223.
+verify-artifacts.py отдельно проверяет неизменность15C/header файлов,
+унаследованные3871native/23OEMARM и свежие48WPA2/13startup-removal/10timer
+проверок. Физический CPIO608entries, QEMU добавляет только прежний packet peer.
+Выданный ZIP персональный; c80-auth.cpio сохраняет ключи конкретного владельца.

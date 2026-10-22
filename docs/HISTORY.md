@@ -256,3 +256,13 @@ stale_tokens, ownership_fault и inflight равны нулю. AP работал
 Образы RAM40 и исходники сценария сохранены без изменений.
 
 [Числовой результат](../research/ram40-wpa2-load-test/RESULT-WPA2-LOAD.json).
+
+## RAM41: точные таймеры при прежнем радио
+
+[RAM41](../research/openwrt-ram41-hires/) включает HIGH_RES_TIMERS при HZ100
+и прежних исходниках драйверов, CCK1, канале1 и WPA2. В report добавлен
+диагностический ARM helper. Один и тот же helper на старом/новом QEMU-ядре
+показал средний nanosleep1мс9,88/1,60мс и clock_getres10мс/1нс.
+48WPA2/13startup-removal/10timer cases пройдены свежими;3871native/23OEMARM
+наследуются по неизменным исходникам. Аппаратный тест нового ядра ожидается;
+результат RAM40 с5345/5345ping сохранён отдельно. Новых записей U-Boot/NOR нет.
