@@ -116,10 +116,14 @@
   "Windows_comparison_script_byte_identical_to_RAM40": true,
   "helper_guard_matches_kernel": true,
   "new_NOR_or_UBoot_write_required": false,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "physical_MCU_CCMP_DMA_RF_emulated": false,
   "snapshot_kind": "Explicit MCU initialization waits with precise active AP polling",
   "source_files_byte_identical_to_frozen_workspace": true,
   "original_personal_archive_sha256": "f616553e831236136344242345a7e45ae730ac5ed555da107657dbd3c8e9dd98",
-  "private_keys_binary_images_OEM_inputs_included": false
+  "private_keys_binary_images_OEM_inputs_included": false,
+  "hardware_tested_at_issuance": false,
+  "physical_result_file": "RESULT-WPA2-LOAD.json",
+  "latest_hardware_status": "5361/5361 ICMP, TCP22, small mean4.11ms,42ring wraps/1token wrap and clean shutdown",
+  "physical_reconnect_in_this_version_not_tested": true
 }

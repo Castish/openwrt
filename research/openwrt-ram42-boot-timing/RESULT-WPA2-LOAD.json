@@ -1,0 +1,267 @@
+{
+  "checkpoint": "Physical RAM42 initialization, WPA2 sustained load, latency comparison and clean shutdown confirmed",
+  "recorded_date": "2026-10-22",
+  "source_file_bytes": 17882,
+  "source_file_sha256": "ab76014a67e242d16c43aa727d97c084664538b798d37737e033b154b70ff0a1",
+  "Windows_inline_output_separate_from_uploaded_router_report": true,
+  "physical_Windows_load_tested": true,
+  "windows": {
+    "source": "Owner inline Windows output of c80-wifi-load.ps1; actual JSON file not uploaded",
+    "source_address": "192.168.2.2",
+    "interface_kind": "physical Wi-Fi",
+    "target": "192.168.2.1",
+    "Completed": true,
+    "ZeroLoss": true,
+    "TotalSeconds": 252.803,
+    "Tcp22": true,
+    "TcpSource": "192.168.2.2",
+    "Failure": null,
+    "Windows_PowerShell_version_not_reported": true,
+    "phases": [
+      {
+        "test": "small packet reuse",
+        "payload_bytes": 32,
+        "sent": 5000,
+        "received": 5000,
+        "lost": 0,
+        "seconds": 22.887,
+        "RTT_ms_average": 4.11,
+        "RTT_ms_min": 2,
+        "RTT_ms_max": 59,
+        "completed": true
+      },
+      {
+        "test": "MTU1400 encrypted DF",
+        "payload_bytes": 1372,
+        "DF": true,
+        "sent": 256,
+        "received": 256,
+        "lost": 0,
+        "seconds": 5.41,
+        "RTT_ms_average": 20.27,
+        "RTT_ms_min": 16,
+        "RTT_ms_max": 88,
+        "completed": true
+      },
+      {
+        "test": "keepalive beyond old180s window",
+        "payload_bytes": 32,
+        "sent": 105,
+        "received": 105,
+        "lost": 0,
+        "seconds": 211.867,
+        "RTT_ms_average": 5.68,
+        "RTT_ms_min": 3,
+        "RTT_ms_max": 26,
+        "completed": true
+      }
+    ],
+    "total_ICMP_sent": 5361,
+    "total_ICMP_received": 5361,
+    "total_ICMP_lost": 0,
+    "interactive_SSH_authentication_not_tested_by_TCP_check": true
+  },
+  "router": {
+    "kernel": "6.12.113-c80-openwrt-ram42-boot-timing",
+    "physical_AP_starts_stops": [
+      1,
+      1
+    ],
+    "physical_WPA2_handshakes": 1,
+    "STA_creates_deletes": [
+      1,
+      1
+    ],
+    "key_adds_deletes_refused": [
+      3,
+      1,
+      0
+    ],
+    "GTK_refreshes": 1,
+    "EAPOL_TX_RX": [
+      2,
+      2
+    ],
+    "encrypted_TX_RX": [
+      5407,
+      5443
+    ],
+    "blocked_TX_RX": [
+      0,
+      0
+    ],
+    "replay_bad_crypto": [
+      0,
+      0
+    ],
+    "runtime_data_submitted_headers_tokens_completed": [
+      5409,
+      5409,
+      5409,
+      5409
+    ],
+    "inflight_early_tokens_duplicate_tokens_TX_rejected": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "payload_cells": 16,
+    "payload_reuses": 5393,
+    "ring_wraps": 42,
+    "token_wraps": 1,
+    "stale_tokens_ownership_fault": [
+      0,
+      0
+    ],
+    "AP_active_us": 545242370,
+    "command_submitted_completed_acked": [
+      41,
+      41,
+      41
+    ],
+    "command_payload_reuses": 18,
+    "command_ring_wraps": 0,
+    "command_fault": 0,
+    "TX_free_reports_valid_bad_other": [
+      5411,
+      5411,
+      0,
+      0
+    ],
+    "TX_free_tokens_ours_foreign_early_duplicate": [
+      5411,
+      5411,
+      0,
+      0,
+      0
+    ],
+    "RX_delivered": 5445,
+    "RX_dropped": 0,
+    "RX_ARP_IPv4": [
+      39,
+      5404
+    ],
+    "RX_MAC_duplicates_filtered": 20,
+    "RX_wrong_peer_filtered": 450,
+    "RX_gate_checked_accepted_rejected": [
+      14354,
+      14247,
+      107
+    ],
+    "RX_gate_CipherMis_mode4_rejected": 107,
+    "RX_gate_peer_lifecycle_rejected": 0,
+    "result_primary_cleanup_critical": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "final_phase": 90,
+    "DMA_idle_MCU_stopped": [
+      1,
+      1
+    ],
+    "pools_retained_until_reboot": 1,
+    "scheduler_restored": true,
+    "rings_bad": 0,
+    "owned_control_bad": 0,
+    "other_control_changes_preserved_as_expected": true,
+    "final_GTK_PTK_authorized_BMC": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "total_MCU_TX_submitted_completed": [
+      72,
+      72
+    ],
+    "firmware_download_TX": [
+      31,
+      31
+    ],
+    "MemAvailable_KiB": 7800,
+    "fresh_boot_required": true,
+    "power_cycle_required": false,
+    "flash_writes": 0,
+    "RF_ACK_report_flag_still_zero": true,
+    "bidirectional_physical_traffic_confirmed_by_Windows_echo_and_TCP": true,
+    "reconnect_not_exercised_in_this_load_run": true,
+    "timer": {
+      "monotonic_res_ns": 1,
+      "realtime_res_ns": 1,
+      "requested_sleep_ns": 1000000,
+      "samples": 64,
+      "min_ns": 1054500,
+      "mean_ns": 1078501,
+      "max_ns": 2553350,
+      "interrupted": 0,
+      "peripheral_access": 0
+    },
+    "initialization_timing": {
+      "ready_wait_us": 51147,
+      "own_settle_requested_us": 10000,
+      "own_settle_us": 10057,
+      "settled": 1,
+      "own_wait_us": 10056,
+      "own_confirmed": 1,
+      "ready_limit_us": 2000000,
+      "own_limit_us": 2000000,
+      "ownership_retries": 0
+    },
+    "delay_policy_observations": {
+      "init_floor_us": 10000,
+      "runtime_poll_us": 1000,
+      "runtime_phase": 37,
+      "init_calls": 479,
+      "floored": 478,
+      "runtime_calls": 505076,
+      "cleanup_calls": 1
+    },
+    "initial_ownership": {
+      "before": "00030001",
+      "after": "00030000",
+      "requests": 1
+    }
+  },
+  "comparison_with_RAM40": [
+    {
+      "test": "small packet reuse",
+      "RAM40_average_ms": 9.82,
+      "RAM42_average_ms": 4.11,
+      "average_reduction_percent": 58.15,
+      "RAM40_max_ms": 42,
+      "RAM42_max_ms": 59
+    },
+    {
+      "test": "MTU1400 encrypted DF",
+      "RAM40_average_ms": 23.25,
+      "RAM42_average_ms": 20.27,
+      "average_reduction_percent": 12.82,
+      "RAM40_max_ms": 54,
+      "RAM42_max_ms": 88
+    },
+    {
+      "test": "keepalive beyond old180s window",
+      "RAM40_average_ms": 9.99,
+      "RAM42_average_ms": 5.68,
+      "average_reduction_percent": 43.14,
+      "RAM40_max_ms": 27,
+      "RAM42_max_ms": 26
+    }
+  ],
+  "comparison_scope": {
+    "same_issued_Windows_test_script": true,
+    "RAM40_ICMP_samples": 5345,
+    "RAM42_ICMP_samples": 5361,
+    "radio_environment_not_controlled_or_measured": true,
+    "latency_components_not_independently_partitioned": true,
+    "higher_peak_RTT_remains_in_small_and_large_phases": true,
+    "physical_BOOT_race_cause_not_proven_by_success": true,
+    "AP_data_TX_remains_fixed_CCK1_1Mbps": true,
+    "client_uplink_PHY_rate_not_measured": true
+  },
+  "raw_logs_MAC_addresses_private_keys_packets_not_published": true,
+  "next_step": "Retain RAM42 as the measured working baseline; future radio-rate or wakeup work needs a separate version. No new image at this checkpoint."
+}
