@@ -1,0 +1,131 @@
+{
+  "passed": true,
+  "release": "C80 OpenWrt RAM43 CCK11 data trial",
+  "kernel": "6.12.113-c80-openwrt-ram43-cck11",
+  "layout": {
+    "build": {
+      "entry": "40208000",
+      "high_end": "40b77678",
+      "auth_initrd_start": "40d00000"
+    },
+    "build-qemu": {
+      "entry": "40208000",
+      "high_end": "40c777f8",
+      "auth_initrd_start": "40d00000"
+    }
+  },
+  "changed_production_driver_sources": [
+    "c80_mcu_core.h",
+    "c80_mcu_transport.c",
+    "c80_net_core.h",
+    "c80_net_types.h"
+  ],
+  "added_production_headers": [],
+  "unchanged_production_driver_sources": [
+    "c80_cfg80211.h",
+    "c80_key_linux.h",
+    "c80_net_linux.h",
+    "c80_net_selftest.c",
+    "c80_radio.h",
+    "c80_restart.c",
+    "c80_rsn.h",
+    "c80_security_core.h",
+    "c80_security_parse.h",
+    "c80_security_types.h",
+    "c80_session_core.h",
+    "c80_timer_check.c",
+    "c80_timing.h"
+  ],
+  "kernel_config_changes": {
+    "build": {
+      "CONFIG_INITRAMFS_SOURCE": {
+        "before": "\"/workspace/.openwrt-onboarding/research/openwrt-ram42-boot-timing/initramfs.list\"",
+        "after": "\"/workspace/.openwrt-onboarding/research/openwrt-ram43-cck11/initramfs.list\""
+      },
+      "CONFIG_LOCALVERSION": {
+        "before": "\"-c80-openwrt-ram42-boot-timing\"",
+        "after": "\"-c80-openwrt-ram43-cck11\""
+      }
+    },
+    "build-qemu": {
+      "CONFIG_INITRAMFS_SOURCE": {
+        "before": "\"/workspace/.openwrt-onboarding/research/openwrt-ram42-boot-timing/initramfs-qemu.list\"",
+        "after": "\"/workspace/.openwrt-onboarding/research/openwrt-ram43-cck11/initramfs-qemu.list\""
+      },
+      "CONFIG_LOCALVERSION": {
+        "before": "\"-c80-openwrt-ram42-qemu-check\"",
+        "after": "\"-c80-openwrt-ram43-qemu-check\""
+      }
+    }
+  },
+  "HIGH_RES_TIMERS": true,
+  "HZ": 100,
+  "configured_AP_data_rate_Mbps": 11,
+  "EAPOL_management_rate_Mbps": 1,
+  "rate_adaptation": false,
+  "on_air_rate_measured": false,
+  "channel": 1,
+  "MTU": 1400,
+  "WPA2_CCMP_policy_unchanged": true,
+  "TXD_rate_byte_changed": 26,
+  "packet_layout_unchanged": true,
+  "startup_sleep_floor_us": 10000,
+  "ownership_settle_us": 10000,
+  "active_AP_poll_us": 1000,
+  "ownership_retries": 0,
+  "ownership_timeout_us": 2000000,
+  "physical_failure_cause_proven": false,
+  "native_cases_fresh": 3871,
+  "new_boot_timing_cases_fresh": 12,
+  "new_data_rate_cases_fresh": 250,
+  "native_total_cases_fresh": 4133,
+  "fresh_OEM_rate_cases": 44,
+  "native_cases_inherited": 0,
+  "native_source_identity_verified": true,
+  "all_native_suites_rerun": true,
+  "parent_OEM_ARM_cases_inherited_not_rerun": 23,
+  "fresh_QEMU_WPA2_checks": 48,
+  "fresh_QEMU_timer_checks": 5,
+  "fresh_QEMU_timer_samples": 64,
+  "QEMU_timer_comparison": {
+    "current": {
+      "monotonic_res_ns": 1,
+      "realtime_res_ns": 1,
+      "requested_sleep_ns": 1000000,
+      "samples": 64,
+      "min_ns": 1110528,
+      "mean_ns": 1412761,
+      "max_ns": 13067184,
+      "interrupted": 0,
+      "peripheral_access": 0
+    }
+  },
+  "QEMU_WiFi_RTT_or_physical_radio_measurement": false,
+  "fresh_QEMU_startup_removal_checks": 13,
+  "actual_ARM_report_callback_cases": 34,
+  "QEMU_real_Linux_protocol_cases": 13,
+  "QEMU_memory_available_KiB": 6544,
+  "fresh_decompressor_checks": 6,
+  "fresh_handoff_checks": 5,
+  "fresh_restart_checks": 8,
+  "rootfs_changed": [
+    "etc/c80-hostapd.conf",
+    "usr/sbin/c80-wifi"
+  ],
+  "rootfs_added": [],
+  "ELF_files": 67,
+  "signed_packages_unchanged": 45,
+  "DMA_pool_bytes": 668112,
+  "full_patch_files": 33,
+  "full_source_entries_restored": 86730,
+  "Linux_patch_byte_identical_to_RAM42": false,
+  "Windows_comparison_script_byte_identical_to_RAM40": true,
+  "helper_guard_matches_kernel": true,
+  "new_NOR_or_UBoot_write_required": false,
+  "hardware_tested": false,
+  "physical_MCU_CCMP_DMA_RF_emulated": false,
+  "snapshot_kind": "Fixed CCK11 AP data; CCK1 EAPOL and management, RAM42 timings",
+  "source_files_byte_identical_to_frozen_workspace": true,
+  "original_personal_archive_sha256": "6799fea0ef070a2741bd3ebd9c0b1a47f3ecc18f6ffd6cf15b0d01d484887313",
+  "private_keys_binary_images_OEM_inputs_included": false
+}

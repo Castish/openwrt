@@ -1,0 +1,52 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef C80_NET_TYPES_H
+#define C80_NET_TYPES_H
+/* Legacy mode retains its256 unique packets. Explicit recycling mode uses
+ * 16 payload cells and the512 descriptor ring after paired completion.
+ * The separate management headers/payloads remain immutable. */
+#define C80_NET_RING_N 512u
+#define C80_NET_RECYCLE_RING_N 128u
+#define C80_NET_TX_N 256u
+#define C80_NET_TOKEN_BASE 16u
+#define C80_NET_RECYCLE_N 16u
+#define C80_NET_TOKEN_COUNT (4096u-C80_NET_TOKEN_BASE)
+#define C80_NET_MTU 1400u
+#define C80_NET_ETH_MAX (14u+C80_NET_MTU)
+#define C80_NET_FRAME_MAX 1440u
+#define C80_NET_SUBMITTED 1u
+#define C80_NET_HEADER_DONE 2u
+#define C80_NET_RETURNED 4u
+struct c80_net_cell {
+    c80_u8 header[64];
+    c80_u8 frame[C80_NET_FRAME_MAX];
+} __attribute__((aligned(16)));
+struct c80_net_pool {
+    struct c80_net_cell tx[C80_NET_TX_N];
+    /* CPU-only conversion scratch, never referenced by a DMA descriptor. */
+    c80_u8 ethernet[C80_NET_ETH_MAX];
+};
+struct c80_net_result {
+    c80_u32 enabled,prepared,linked,closed,exhausted,stop_requested;
+    c80_u32 submitted,headers,returned,completed,inflight;
+    c80_u32 early_tokens,duplicate_tokens,tx_rejected;
+    c80_u32 rx_seen,rx_raw,rx_translated,rx_bad_length,rx_bad_format;
+    c80_u32 rx_bad_status,rx_wrong_peer,rx_bad_protocol,rx_duplicate;
+    c80_u32 rx_delivered,rx_dropped,rx_arp,rx_ipv4;
+    c80_u32 last_ctrl,last_cpu,last_dma,last_slot,last_wait_us;
+    c80_u32 last_seq,last_tid,seq_valid;
+    c80_u8 token[C80_NET_TX_N];
+    c80_u32 ethernet_bytes[C80_NET_TX_N];
+    c80_u64 submitted_us;
+    /* CPU-only ownership ledger. Old fixtures leave recycling disabled. */
+    c80_u32 recycling,active_slot,active_token,token_fault;
+    c80_u32 payload_reuses,ring_wraps,token_wraps,stale_tokens;
+    c80_u32 cell_generation[C80_NET_RECYCLE_N];
+    c80_u32 descriptor_generation[C80_NET_RING_N];
+    c80_u64 active_us;
+    /* Optional sequential-session SME shares this same completion ledger.
+     * Counters above include runtime management posts in session mode. */
+    c80_u32 session_pause,management_pending,active_kind;
+    c80_u32 management_submitted,management_completed,data_submitted,data_completed;
+    c80_u32 data_cck1_submitted,data_cck11_submitted; /* Selected TXD, not RF telemetry. */
+};
+#endif

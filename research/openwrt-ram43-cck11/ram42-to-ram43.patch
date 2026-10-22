@@ -1,0 +1,114 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -109,6 +109,7 @@
+     c80_u32 cfg80211_test; /* AP request/template supplied through nl80211. */
+     c80_u32 session_test; /* Sequential open client sessions; AP stays running. */
+     c80_u32 wpa2_test;
++    c80_u32 data_cck11_test; /* WPA2 ARP/IP TX only; EAPOL/management stay CCK1. */
+     void (*beacon_diag)(void *,const struct c80_beacon_diag *);
+     int (*key_fetch)(void *,struct c80_key_request *);
+     void (*key_done)(void *,const struct c80_key_request *,c80_u32);
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -551,13 +551,15 @@
+         "RX_delivered=%u dropped=%u ARP=%u IPv4=%u last_slot=%u CPU=%u DMA=%u ctrl=%08x wait_us=%u\n"
+         "recycling=%u payload_cells=16 payload_reuses=%u ring_wraps=%u token_wraps=%u stale_tokens=%u ownership_fault=%u active_us=%llu\n"
+         "active_slot=%u active_token=%u active_flags=%x allocated_descriptor_cells=512\n"
++        "configured_data_rate_kbps=%u EAPOL_rate_kbps=1000 TXD_CCK1_submitted=%u TXD_CCK11_submitted=%u on_air_rate_measured=0\n"
+         "Linux_ARP_IP_UDP_TCP=1 diagnostic_echo=0 one_open_peer=1 retained_after_stop_until_reboot=1\n",
+         n->enabled,n->prepared,n->linked,n->closed,n->exhausted,n->stop_requested,c80_auth_ring_size(&c->io),
+         n->submitted,n->headers,n->returned,n->completed,n->inflight,n->early_tokens,n->duplicate_tokens,n->tx_rejected,
+         n->rx_seen,n->rx_raw,n->rx_translated,n->rx_bad_length,n->rx_bad_format,n->rx_bad_status,n->rx_wrong_peer,n->rx_bad_protocol,n->rx_duplicate,
+         n->rx_delivered,n->rx_dropped,n->rx_arp,n->rx_ipv4,n->last_slot,n->last_cpu,n->last_dma,n->last_ctrl,n->last_wait_us,
+         n->recycling,n->payload_reuses,n->ring_wraps,n->token_wraps,n->stale_tokens,n->token_fault,n->active_us,
+-        n->active_slot,n->active_token,n->inflight && n->inflight<=C80_NET_RECYCLE_N?n->token[n->inflight-1]:0);
++        n->active_slot,n->active_token,n->inflight && n->inflight<=C80_NET_RECYCLE_N?n->token[n->inflight-1]:0,
++        c->io.data_cck11_test && c->io.wpa2_test?11000:1000,n->data_cck1_submitted,n->data_cck11_submitted);
+     mutex_unlock(&c->lock);return len;
+ }
+ static ssize_t run_store(struct kobject *kobj,struct kobj_attribute *attr,
+@@ -810,7 +812,7 @@
+         .time_us=c80_linux_time,.delay_us=c80_linux_delay,.dma_order=c80_linux_barrier,
+         .copy_emi=c80_linux_copy,.crc_emi=c80_linux_crc,.stage=c80_linux_stage,
+         .irq_arm=c80_linux_irq_arm,.irq_disarm=c80_linux_irq_disarm,
+-        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.radio_channel=c->radio_channel,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.cfg80211_test=1,.session_test=1,.wpa2_test=1,.beacon_diag=c80_linux_beacon_diag,.key_fetch=c80_linux_key_fetch,.key_done=c80_linux_key_done,.ap_requested=c80_linux_ap_requested,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
++        .nvm_read=c80_linux_nvm_read,.devinfo_test=1,.bss_test=1,.radio_test=1,.radio_channel=c->radio_channel,.beacon_test=1,.long_beacon_test=1,.watch_test=1,.rx0_rearm_test=1,.beacon_state_test=1,.bss_period_test=1,.rx1_rearm_test=1,.management_rx_test=1,.rx1_packet_test=1,.auth_reply_test=1,.assoc_reply_test=1,.data_echo_test=0,.netdev_test=1,.net_recycle_test=1,.scheduler_test=1,.cfg80211_test=1,.session_test=1,.wpa2_test=1,.data_cck11_test=1,.beacon_diag=c80_linux_beacon_diag,.key_fetch=c80_linux_key_fetch,.key_done=c80_linux_key_done,.ap_requested=c80_linux_ap_requested,.net_prepare=c80_linux_net_prepare,.net_link=c80_linux_net_link,.net_receive=c80_linux_net_receive,.net_dequeue=c80_linux_net_dequeue,.net_complete=c80_linux_net_complete,.net_stop_requested=c80_linux_net_stop_requested};
+     c->irq=platform_get_irq(pdev,0);
+     if(c->irq<0) return c->irq;
+     rc=devm_request_irq(&pdev->dev,c->irq,c80_mcu_irq,IRQF_NO_AUTOEN,
+--- a/c80_net_core.h
++++ b/c80_net_core.h
+@@ -124,6 +124,12 @@
+     cell=&io->pool->net.tx[index];h=cell->header;f=cell->frame;raw=32+len;
+     if(raw>C80_NET_FRAME_MAX) return 0;
+     for(i=0;i<64;++i) h[i]=i<32?txd[i]:0;
++    /* Actual OEM403199fc ->4031940c, PHY mode0/MCS3/long preamble:
++     * CCK11 encodes rate3 in TXD6 bits16..27. Four CCK rates are required
++     * by both association paths. Keep EAPOL at CCK1; no key/PN/retry changes.
++     * Duration304 remains the conservative legacy 1Mbps ACK reservation.
++     */
++    if(io->data_cck11_test && io->wpa2_test && type!=0x888e) c80_put16(h+26,3);
+     if(io->wpa2_test && type!=0x888e) h[12]|=2; /* Actual OEM TXD3_PROTECT_FRAME. */
+     c80_put16(f,0x0208|(io->wpa2_test && type!=0x888e?0x4000:0));c80_put16(f+2,304);c80_put16(f+22,sequence<<4);
+     /* One existing unicast STA, including a copy of a Linux broadcast.
+@@ -237,7 +243,11 @@
+     n->token[index]=C80_NET_SUBMITTED;n->inflight=index+1;n->submitted_us=now;
+     n->active_slot=slot;n->active_token=token;++n->submitted;
+     if(n->active_kind) { ++n->management_submitted;n->management_pending=0; }
+-    else ++n->data_submitted;
++    else {
++        ++n->data_submitted;
++        if(c80_get16(cell->header+26)==3) ++n->data_cck11_submitted;
++        else ++n->data_cck1_submitted;
++    }
+     n->cell_generation[index]=n->descriptor_generation[slot]=n->submitted;n->last_slot=slot;
+     c80_write(io,C80_AUTH_RING+8,next);n->last_cpu=c80_read(io,C80_AUTH_RING+8);
+     if(n->last_cpu!=next) return C80_NET_PUBLISH;
+--- a/c80_net_types.h
++++ b/c80_net_types.h
+@@ -47,5 +47,6 @@
+      * Counters above include runtime management posts in session mode. */
+     c80_u32 session_pause,management_pending,active_kind;
+     c80_u32 management_submitted,management_completed,data_submitted,data_completed;
++    c80_u32 data_cck1_submitted,data_cck11_submitted; /* Selected TXD, not RF telemetry. */
+ };
+ #endif
+--- a/minimal.config
++++ b/minimal.config
+@@ -1,4 +1,4 @@
+-CONFIG_LOCALVERSION="-c80-openwrt-ram42-boot-timing"
++CONFIG_LOCALVERSION="-c80-openwrt-ram43-cck11"
+ CONFIG_LOCALVERSION_AUTO=n
+ CONFIG_EXPERT=y
+ CONFIG_EMBEDDED=y
+--- a/rootfs/etc/c80-hostapd.conf
++++ b/rootfs/etc/c80-hostapd.conf
+@@ -14,7 +14,7 @@
+ logger_stdout_level=2
+ interface=c80wlan0
+ ctrl_interface=/var/run/c80-hostapd
+-ssid=C80-RAM42
++ssid=C80-RAM43
+ dtim_period=1
+ wmm_enabled=0
+ auth_algs=1
+--- a/rootfs/usr/sbin/c80-wifi
++++ b/rootfs/usr/sbin/c80-wifi
+@@ -2,7 +2,7 @@
+ . /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+ case "${1:-}" in
+ start)
+-    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram42-boot-timing' ] || { echo 'Requires the RAM42 cfg80211 router kernel.';exit 1; }
++    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram43-cck11' ] || { echo 'Requires the RAM43 cfg80211 router kernel.';exit 1; }
+     mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+     /etc/init.d/dnsmasq start
+     ( echo 1 > /sys/kernel/c80_wifi/run
+@@ -48,7 +48,7 @@
+     # evidence that a later network operation kept the AP running.
+     sleep 1
+     c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    echo 'hostapd started C80-RAM42 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
++    echo 'hostapd started C80-RAM43 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+     ;;
+ stop)
+     echo 1 > /sys/kernel/c80_wifi/stop || exit 1

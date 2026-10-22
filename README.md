@@ -64,10 +64,17 @@ C80_OWN_TIMEOUT8, без запуска host DMA, с чистой останов
 **4,11 мс вместо 9,82 мс**, чистая остановка DMA/MCU. Пики задержки остаются;
 подробности: [результат RAM42](research/openwrt-ram42-boot-timing/RESULT-WPA2-LOAD.json).
 
+Подготовлена [RAM43 с передачей данных на CCK 11 Мбит/с](research/openwrt-ram43-cck11/).
+ARP/IPv4 от AP получают новый код скорости TXD; EAPOL, управление и маяки
+остаются на 1 Мбит/с. Таймеры RAM42 и WPA2/CCMP сохранены. 4 133 native-
+проверки, 44 OEM ARM-случая и QEMU WPA2/DHCP/TCP прошли. Скорость в эфире
+и уменьшение RTT пока не подтверждены; ожидается сравнение на роутере.
+
 - [История этапов и результаты](docs/HISTORY.md)
 - [Структура и сборка](docs/BUILD.md)
 - [Состав публикации и приватные файлы](docs/PUBLICATION.md)
-- [Каталог69 исходных снимков](docs/source-catalog.json)
+- [Каталог70 исходных снимков](docs/source-catalog.json)
+- [Исходники RAM43 с данными на CCK 11 Мбит/с](research/openwrt-ram43-cck11/)
 - [Исходники RAM42 с отдельными задержками запуска](research/openwrt-ram42-boot-timing/)
 - [Исходники RAM41 с точными таймерами](research/openwrt-ram41-hires/)
 - [Исходники RAM40 с диагностикой RX](research/openwrt-ram40-rx-status/)
