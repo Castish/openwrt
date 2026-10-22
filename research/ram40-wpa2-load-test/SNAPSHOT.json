@@ -42,5 +42,8 @@
   },
   "firmware_or_driver_changed": false,
   "public_private_keys_OEM_inputs_raw_hardware_logs_included": false,
-  "physical_Windows_load_tested": false
+  "physical_Windows_load_tested": true,
+  "physical_Windows_load_tested_at_issuance": false,
+  "physical_result_file": "RESULT-WPA2-LOAD.json",
+  "latest_hardware_status": "5345/5345 ICMP, TCP22,42ring wraps/1token wrap, clean shutdown on physical RAM40"
 }

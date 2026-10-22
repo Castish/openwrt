@@ -241,7 +241,7 @@
     "next_check": "Same RAM40 normal reboot/start and one Wi-Fi client; confirm physical interface route, DHCP address, ping then TCP; no new image required",
     "raw_logs_addresses_keys_not_published": true
   },
-  "next_check": "Same running RAM40 WPA2 AP; Windows sustained load script, then clean stop and report",
+  "next_check": "Performance work: enable high resolution timers first and compare the same Windows load test; no new image at this checkpoint",
   "physical_IP_followup": {
     "source": "Owner inline PowerShell output; no uploaded raw file or source-file hash claimed",
     "stage_context": "RAM40 following requested same-image reboot/start and Wi-Fi IP check",
@@ -295,7 +295,7 @@
     "new_image_or_flash_write_required": false,
     "next_validation": "Same running RAM40; MTU1400 with1472-excluded/1372payload DF ping and sustained WPA2 descriptor/token/PN reuse; no repeated basic route/20ping required"
   },
-  "latest_hardware_status": "WPA2 reconnect,40/40 small pings,TCP22 twice and10/10 MTU1400 DF pings confirmed; sustained WPA2 load pending",
+  "latest_hardware_status": "WPA2 reconnect/IP/MTU and sustained5345/5345encrypted load plus clean shutdown confirmed",
   "physical_MTU_followup": {
     "source": "Owner inline Windows PowerShell output; no uploaded file or source-file hash claimed",
     "stage_context": "Continuing the running RAM40 WPA2 connection after physical Wi-Fi route/IP/TCP checks",
@@ -340,5 +340,199 @@
     "CONFIG_HIGH_RES_TIMERS": false,
     "per_stage_latency_contribution_physically_measured": false,
     "firmware_performance_changes_made": false
+  },
+  "physical_WPA2_load_followup": {
+    "checkpoint": "Physical RAM40 WPA2 sustained load and clean shutdown confirmed",
+    "recorded_date": "2026-10-22",
+    "source_file_bytes": 16102,
+    "source_file_sha256": "19a87ebaa75ebe22b53af832c924ef9b2e21ed4682992402453c98b13eac0e29",
+    "Windows_inline_output_separate_from_uploaded_router_report": true,
+    "physical_Windows_load_tested": true,
+    "windows": {
+      "source": "Owner inline output of the issued c80-wifi-load.ps1 on Windows; JSON result file itself was not uploaded",
+      "source_address": "192.168.2.2",
+      "interface_kind": "physical Wi-Fi",
+      "target": "192.168.2.1",
+      "Completed": true,
+      "ZeroLoss": true,
+      "TotalSeconds": 252.091,
+      "Tcp22": true,
+      "TcpSource": "192.168.2.2",
+      "Failure": null,
+      "Windows_PowerShell_version_not_reported": true,
+      "phases": [
+        {
+          "test": "small packet reuse",
+          "payload_bytes": 32,
+          "sent": 5000,
+          "received": 5000,
+          "lost": 0,
+          "seconds": 53.309,
+          "RTT_ms_average": 9.82,
+          "RTT_ms_min": 3,
+          "RTT_ms_max": 42,
+          "completed": true
+        },
+        {
+          "test": "MTU1400 encrypted DF",
+          "payload_bytes": 1372,
+          "DF": true,
+          "sent": 256,
+          "received": 256,
+          "lost": 0,
+          "seconds": 6.201,
+          "RTT_ms_average": 23.25,
+          "RTT_ms_min": 16,
+          "RTT_ms_max": 54,
+          "completed": true
+        },
+        {
+          "test": "keepalive beyond old180s window",
+          "payload_bytes": 32,
+          "sent": 89,
+          "received": 89,
+          "lost": 0,
+          "seconds": 179.822,
+          "RTT_ms_average": 9.99,
+          "RTT_ms_min": 4,
+          "RTT_ms_max": 27,
+          "completed": true
+        }
+      ],
+      "total_ICMP_sent": 5345,
+      "total_ICMP_received": 5345,
+      "total_ICMP_lost": 0,
+      "interactive_SSH_authentication_not_tested_by_TCP_check": true
+    },
+    "router": {
+      "kernel": "6.12.113-c80-openwrt-ram40-rx-status",
+      "physical_AP_starts_stops": [
+        1,
+        1
+      ],
+      "physical_WPA2_handshakes": 1,
+      "STA_creates_deletes": [
+        1,
+        1
+      ],
+      "key_adds_deletes_refused": [
+        3,
+        1,
+        0
+      ],
+      "GTK_refreshes": 1,
+      "EAPOL_TX_RX": [
+        2,
+        2
+      ],
+      "encrypted_TX_RX": [
+        5383,
+        5409
+      ],
+      "blocked_TX_RX": [
+        0,
+        0
+      ],
+      "replay_bad_crypto": [
+        0,
+        0
+      ],
+      "runtime_data_submitted_headers_tokens_completed": [
+        5385,
+        5385,
+        5385,
+        5385
+      ],
+      "inflight_early_tokens_duplicate_tokens_TX_rejected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "payload_cells": 16,
+      "payload_reuses": 5369,
+      "ring_wraps": 42,
+      "token_wraps": 1,
+      "stale_tokens_ownership_fault": [
+        0,
+        0
+      ],
+      "AP_active_us": 367984477,
+      "command_submitted_completed_acked": [
+        41,
+        41,
+        41
+      ],
+      "command_payload_reuses": 18,
+      "command_ring_wraps": 0,
+      "command_fault": 0,
+      "TX_free_reports_valid_bad_other": [
+        5387,
+        5387,
+        0,
+        0
+      ],
+      "TX_free_tokens_ours_foreign_early_duplicate": [
+        5387,
+        5387,
+        0,
+        0,
+        0
+      ],
+      "RX_delivered": 5411,
+      "RX_dropped": 0,
+      "RX_ARP_IPv4": [
+        26,
+        5383
+      ],
+      "RX_MAC_duplicates_filtered": 11,
+      "RX_wrong_peer_filtered": 464,
+      "RX_gate_checked_accepted_rejected": [
+        21558,
+        21461,
+        97
+      ],
+      "RX_gate_CipherMis_mode4_rejected": 97,
+      "RX_gate_peer_lifecycle_rejected": 0,
+      "result_primary_cleanup_critical": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "final_phase": 90,
+      "DMA_idle_MCU_stopped": [
+        1,
+        1
+      ],
+      "pools_retained_until_reboot": 1,
+      "scheduler_restored": true,
+      "rings_bad": 0,
+      "owned_control_bad": 0,
+      "final_GTK_PTK_authorized_BMC": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "total_MCU_TX_submitted_completed": [
+        72,
+        72
+      ],
+      "firmware_download_TX": [
+        31,
+        31
+      ],
+      "MemAvailable_KiB": 7760,
+      "fresh_boot_required": true,
+      "power_cycle_required": false,
+      "flash_writes": 0,
+      "RF_ACK_report_flag_still_zero": true,
+      "bidirectional_physical_traffic_confirmed_by_Windows_echo_and_TCP": true,
+      "reconnect_not_exercised_in_this_load_run": true
+    },
+    "source_and_firmware_unchanged": true,
+    "raw_logs_MAC_addresses_private_keys_packets_not_published": true,
+    "next_step": "Performance work: enable high resolution timers first and compare the same Windows load test; no new image at this checkpoint"
   }
 }
