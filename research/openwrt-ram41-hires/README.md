@@ -86,3 +86,10 @@ PROVENANCE.json и package-manifest.json связывают точные исх�
 Публичные шаблоны rootfs находятся в overrides/. Бинарный c80-timer-check
 собирается из c80_timer_check.c через build-timer-check.py; бинарник, персональный
 SSH overlay, OEM firmware и Linux tar в Git не входят. Зависимости: ../../docs/BUILD.md.
+
+## Позднейший аппаратный результат
+
+Ядро и точные таймеры подтвердились на плате; подготовка Wi-Fi завершилась
+C80_OWN_TIMEOUT8 до host DMA. MCU остановлен, cleanup/critical0. Это уточнение
+первоначального состояния «аппаратный тест ожидается», без изменения выданного
+ZIP или исходного снимка. Подробности: RESULT-HARDWARE-BOOT.json.
