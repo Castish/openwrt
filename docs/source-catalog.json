@@ -407,6 +407,12 @@
       "source_files": 112,
       "source_bytes": 1170907,
       "snapshot_path": "research/openwrt-ram41-hires"
+    },
+    {
+      "stage": "openwrt-ram42-boot-timing",
+      "source_files": 115,
+      "source_bytes": 1187788,
+      "snapshot_path": "research/openwrt-ram42-boot-timing"
     }
   ],
   "export_policy": "allowlisted text source only; original binary artifacts and private data excluded"

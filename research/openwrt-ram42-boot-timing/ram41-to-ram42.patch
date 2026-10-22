@@ -1,0 +1,204 @@
+--- a/c80_mcu_core.h
++++ b/c80_mcu_core.h
+@@ -39,6 +39,7 @@
+ #define C80_NVM_POLL_US 1000u
+ #define C80_DEVINFO_WAIT_US 6000000u /* OEM40261b80/8c: default6000ms. */
+ 
++#include "c80_timing.h"
+ #include "c80_net_types.h"
+ #include "c80_security_types.h"
+ 
+@@ -220,6 +221,8 @@
+     struct c80_session_result session;
+     struct c80_command_cycle command_cycle;
+     c80_u32 phase,primary,cleanup,critical,ready,own_before,own_last,own_sent;
++    c80_u64 boot_ready_wait_us,boot_settle_us,boot_own_wait_us;
++    c80_u32 boot_settled,boot_own_confirmed;
+     c80_u32 glo_before,glo_after,mask_before,mask_after,source_after;
+     c80_u32 controls_before[3],controls_after[3],aon_before[10],aon_after[10];
+     c80_u32 rings_before[4][4],rings_after[4][4];
+@@ -475,6 +478,34 @@
+     }
+     return 0;
+ }
++static c80_u32 c80_initial_ownership(struct c80_io *io,struct c80_result *r)
++{
++    c80_u64 start,now;int acquired;
++    r->own_before=r->own_last=c80_read(io,C80_OWN);
++    if(r->own_before==0xffffffffu) return C80_OWN_TIMEOUT;
++    if(r->own_before&1) {
++        /* RAM41 reaches the bootstrap marker with real sub-tick waits, but
++         * its one ownership request was not acknowledged on hardware. Allow
++         * a bounded settling interval before that same command. No retries,
++         * timeout extension, RMW or fabricated ownership/completion state.
++         * The firmware's actual minimum requirement is not established.
++         */
++        start=io->time_us(io->context);
++        io->delay_us(io->context,C80_OWN_SETTLE_US);
++        now=io->time_us(io->context);
++        if(now<start) return C80_BAD_TIMER;
++        r->boot_settle_us=now-start;
++        if(r->boot_settle_us<C80_OWN_SETTLE_US) return C80_BAD_TIMER;
++        r->boot_settled=1;
++        c80_write(io,C80_OWN,2);r->own_sent=1;
++    }
++    start=io->time_us(io->context);
++    acquired=c80_poll(io,C80_OWN,1,0,2000000,&r->own_last);
++    now=io->time_us(io->context);
++    if(now>=start) r->boot_own_wait_us=now-start;
++    r->boot_own_confirmed=!!acquired;
++    return acquired?0:C80_OWN_TIMEOUT;
++}
+ static c80_u32 c80_dma_address(struct c80_io *io,const volatile void *p)
+ { return io->dma_base+(c80_u32)((const volatile c80_u8 *)p-(const volatile c80_u8 *)io->pool); }
+ static void c80_put16(c80_u8 *p,c80_u32 v) { p[0]=v; p[1]=v>>8; }
+@@ -2240,11 +2271,12 @@
+     c80_write(io,C80_RESET,((v&0xffffff)&~0x1000u)|0x88000000);
+     if(c80_read(io,C80_RESET)&0x1000) { rc=C80_BOOT_CONTROL; goto done; }
+     c80_stage(io,r,4);
+-    if(!c80_poll(io,0x18002600,~0u,0x1d1e,2000000,0)) { rc=C80_READY_TIMEOUT; goto done; }
+-    r->ready=1; r->own_before=c80_read(io,C80_OWN);
+-    if(r->own_before==0xffffffffu) { rc=C80_OWN_TIMEOUT; goto done; }
+-    if(r->own_before&1) { c80_write(io,C80_OWN,2); r->own_sent=1; }
+-    if(!c80_poll(io,C80_OWN,1,0,2000000,&r->own_last)) { rc=C80_OWN_TIMEOUT; goto done; }
++    start=io->time_us(io->context);
++    r->ready=!!c80_poll(io,0x18002600,~0u,0x1d1e,2000000,0);
++    { c80_u64 now=io->time_us(io->context);
++      if(now>=start) r->boot_ready_wait_us=now-start; }
++    if(!r->ready) { rc=C80_READY_TIMEOUT; goto done; }
++    rc=c80_initial_ownership(io,r);if(rc) goto done;
+     r->glo_before=c80_read(io,C80_GLO); r->mask_before=c80_read(io,C80_MASK);
+     if(r->glo_before==0xffffffffu || (r->glo_before&15) || r->mask_before) {
+         rc=C80_BAD_DMA; goto done;
+--- a/c80_mcu_transport.c
++++ b/c80_mcu_transport.c
+@@ -56,6 +56,7 @@
+     struct rtnl_link_stats64 net_stats;
+     bool net_accept;
+     bool net_stop_requested;
++    u32 init_delay_calls,init_delay_floors,runtime_delay_calls,cleanup_delay_calls;
+ };
+ static struct c80_linux *c80_live;
+ static void c80_linux_beacon_diag(void *context,const struct c80_beacon_diag *snapshot)
+@@ -93,7 +94,14 @@
+ static c80_u64 c80_linux_time(void *context)
+ { return ktime_to_us(ktime_get()); }
+ static void c80_linux_delay(void *context,c80_u32 us)
+-{ usleep_range(us,us+50); }
++{
++    struct c80_linux *c=context;u32 phase=c->result.phase;
++    u32 minimum=c80_delay_min_us(phase,us);
++    if(phase==37) ++c->runtime_delay_calls;
++    else if(phase==90) ++c->cleanup_delay_calls;
++    else { ++c->init_delay_calls;if(minimum>us) ++c->init_delay_floors; }
++    usleep_range(minimum,minimum+50);
++}
+ static void c80_linux_barrier(void *context,int publish)
+ { if(publish) dma_wmb(); else dma_rmb(); }
+ static void c80_linux_copy(void *context,c80_u32 offset,const c80_u8 *src,c80_u32 n)
+@@ -189,6 +197,21 @@
+     synchronize_irq(c->irq);
+     if(r->irq_cpu_started) r->irq_cpu_stopped=1;
+     return r->irq_faults?C80_IRQ_BAD:r->irq_events?0:C80_IRQ_NOT_SEEN;
++}
++/* Completed-run CPU observations only; never read MMIO in a report callback. */
++static ssize_t timing_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
++{
++    struct c80_linux *c=c80_live;struct c80_result *r;ssize_t n;
++    if(!c) return -ENODEV;
++    if(!mutex_trylock(&c->lock)) return -EBUSY;
++    r=&c->result;
++    n=sysfs_emit(buf,
++        "init_floor_us=%u runtime_poll_us=1000 runtime_phase=37 init_calls=%u floored=%u runtime_calls=%u cleanup_calls=%u\n"
++        "ready_wait_us=%llu own_settle_requested_us=%u own_settle_us=%llu settled=%u own_wait_us=%llu own_confirmed=%u ready_limit_us=2000000 own_limit_us=2000000 ownership_retries=0\n"
++        "MCU_DMA_RF_timing_contract_unproven=1 MMIO_on_read=0\n",
++        C80_INIT_SLEEP_US,c->init_delay_calls,c->init_delay_floors,c->runtime_delay_calls,c->cleanup_delay_calls,
++        r->boot_ready_wait_us,C80_OWN_SETTLE_US,r->boot_settle_us,r->boot_settled,r->boot_own_wait_us,r->boot_own_confirmed);
++    mutex_unlock(&c->lock);return n;
+ }
+ static ssize_t status_show(struct kobject *kobj,struct kobj_attribute *attr,char *buf)
+ {
+@@ -697,8 +720,9 @@
+ static struct kobj_attribute beacon_attr=__ATTR_RO(beacon);
+ static struct kobj_attribute radio_attr=__ATTR_RO(radio);
+ static struct kobj_attribute status_attr=__ATTR_RO(status);
++static struct kobj_attribute timing_attr=__ATTR_RO(timing);
+ static struct kobj_attribute run_attr=__ATTR(run,0200,NULL,run_store);
+-static struct attribute *c80_attrs[]={&beacon_diag_attr.attr,&security_attr.attr,&session_attr.attr,&control_attr.attr,&stop_attr.attr,&scheduler_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
++static struct attribute *c80_attrs[]={&timing_attr.attr,&beacon_diag_attr.attr,&security_attr.attr,&session_attr.attr,&control_attr.attr,&stop_attr.attr,&scheduler_attr.attr,&netdev_attr.attr,&data_attr.attr,&completion_attr.attr,&association_attr.attr,&reply_attr.attr,&mgmt_attr.attr,&events_attr.attr,&status_attr.attr,&radio_attr.attr,&beacon_attr.attr,&state_attr.attr,&watch_attr.attr,&run_attr.attr,NULL};
+ static const struct attribute_group c80_group={.attrs=c80_attrs};
+ 
+ #if IS_ENABLED(CONFIG_C80_NET_SELFTEST)
+@@ -710,7 +734,7 @@
+     ssize_t (*const reports[])(struct kobject *,struct kobj_attribute *,char *)={
+         status_show,radio_show,beacon_show,state_show,watch_show,mgmt_show,
+         events_show,reply_show,completion_show,association_show,data_show,
+-        scheduler_show,netdev_show};
++        scheduler_show,netdev_show,timing_show};
+     ssize_t (*const live[])(struct kobject *,struct kobj_attribute *,char *)={
+         control_show,security_show,session_show,beacon_diag_show};
+     struct c80_linux *c,*saved=c80_live;struct c80_beacon_diag snapshot={};char *buf;
+--- a/minimal.config
++++ b/minimal.config
+@@ -1,4 +1,4 @@
+-CONFIG_LOCALVERSION="-c80-openwrt-ram41-hires"
++CONFIG_LOCALVERSION="-c80-openwrt-ram42-boot-timing"
+ CONFIG_LOCALVERSION_AUTO=n
+ CONFIG_EXPERT=y
+ CONFIG_EMBEDDED=y
+--- a/rootfs/etc/c80-hostapd.conf
++++ b/rootfs/etc/c80-hostapd.conf
+@@ -14,7 +14,7 @@
+ logger_stdout_level=2
+ interface=c80wlan0
+ ctrl_interface=/var/run/c80-hostapd
+-ssid=C80-RAM41
++ssid=C80-RAM42
+ dtim_period=1
+ wmm_enabled=0
+ auth_algs=1
+--- a/rootfs/usr/sbin/c80-wifi
++++ b/rootfs/usr/sbin/c80-wifi
+@@ -2,7 +2,7 @@
+ . /usr/libexec/c80-wifi-lifecycle.sh || exit 1
+ case "${1:-}" in
+ start)
+-    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram41-hires' ] || { echo 'Requires the RAM41 cfg80211 router kernel.';exit 1; }
++    [ "$(uname -r)" = '6.12.113-c80-openwrt-ram42-boot-timing' ] || { echo 'Requires the RAM42 cfg80211 router kernel.';exit 1; }
+     mkdir /tmp/c80-wifi-once 2>/dev/null || { echo 'Already prepared this boot; use status/report or reboot.';exit 1; }
+     /etc/init.d/dnsmasq start
+     ( echo 1 > /sys/kernel/c80_wifi/run
+@@ -48,7 +48,7 @@
+     # evidence that a later network operation kept the AP running.
+     sleep 1
+     c80_wifi_assert_active /sys/kernel/c80_wifi/control || { echo 1 > /sys/kernel/c80_wifi/stop;exit 1; }
+-    echo 'hostapd started C80-RAM41 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
++    echo 'hostapd started C80-RAM42 through nl80211; WPA2-PSK/CCMP; password openwrt123; one client; DHCP 192.168.2.2.'
+     ;;
+ stop)
+     echo 1 > /sys/kernel/c80_wifi/stop || exit 1
+@@ -73,7 +73,7 @@
+     cat /tmp/c80-wifi-once/run.log
+     logread -e hostapd
+     cat /sys/kernel/c80_wifi/control
+-    for f in beacon_diag security session mgmt status scheduler netdev completion association;do cat /sys/kernel/c80_wifi/$f;done
++    for f in timing beacon_diag security session mgmt status scheduler netdev completion association;do cat /sys/kernel/c80_wifi/$f;done
+     ifconfig c80wlan0 2>/dev/null
+     ubus call network.interface.wifi_ram status
+     free
+--- /dev/null
++++ b/c80_timing.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef C80_TIMING_H
++#define C80_TIMING_H
++/* RAM40's !HIGH_RES_TIMERS/HZ100 startup implicitly used tick-sized sleeps.
++ * Keep a conservative explicit startup/teardown floor while phase37's active
++ * AP loop, command replies and packet completions use the requested delays.
++ * These are host scheduling minima, not a documented MT7626 timing contract.
++ */
++#define C80_INIT_SLEEP_US 10000u
++#define C80_OWN_SETTLE_US 10000u
++static inline unsigned int c80_delay_min_us(unsigned int phase,unsigned int us)
++{ return phase==37 || us>=C80_INIT_SLEEP_US?us:C80_INIT_SLEEP_US; }
++#endif

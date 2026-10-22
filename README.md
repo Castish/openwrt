@@ -55,10 +55,17 @@ hostapd/WPA2/DHCP/TCP проверки прошли. На плате тайме�
 C80_OWN_TIMEOUT8, без запуска host DMA, с чистой остановкой MCU.
 Результат и пределы вывода сохранены в RESULT-HARDWARE-BOOT.json; RTT не измерен.
 
+Подготовлена [RAM42 с отдельными задержками инициализации](research/openwrt-ram42-boot-timing/).
+Перед начальным запросом управления есть пауза 10 мс; при запуске и остановке
+сохраняется минимум 10 мс для коротких ожиданий. Работающий AP использует точный
+опрос раз в 1 мс. Предел ownership остаётся 2 секунды, без повторных запросов.
+3 883 native-проверки и QEMU WPA2/DHCP/TCP прошли; аппаратный тест ожидается.
+
 - [История этапов и результаты](docs/HISTORY.md)
 - [Структура и сборка](docs/BUILD.md)
 - [Состав публикации и приватные файлы](docs/PUBLICATION.md)
-- [Каталог68 исходных снимков](docs/source-catalog.json)
+- [Каталог69 исходных снимков](docs/source-catalog.json)
+- [Исходники RAM42 с отдельными задержками запуска](research/openwrt-ram42-boot-timing/)
 - [Исходники RAM41 с точными таймерами](research/openwrt-ram41-hires/)
 - [Исходники RAM40 с диагностикой RX](research/openwrt-ram40-rx-status/)
 - [Исходники RAM39 с обновлением GTK](research/openwrt-ram39-gtk-init/)
