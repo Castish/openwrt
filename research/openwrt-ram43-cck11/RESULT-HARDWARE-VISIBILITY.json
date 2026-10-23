@@ -1,0 +1,183 @@
+{
+  "checkpoint": "RAM43 AP enabled but SSID not seen; clean final stop confirmed",
+  "recorded_date": "2026-10-23",
+  "source": "Owner inline SSH transcript and SSID observation; no uploaded original file or source-file digest",
+  "kernel": "6.12.113-c80-openwrt-ram43-cck11",
+  "SSID_visible_reported": false,
+  "live": {
+    "AP_active": true,
+    "GTK_BMC": [
+      1,
+      1
+    ],
+    "PTK_authorized": [
+      0,
+      0
+    ],
+    "command_submitted_completed_acked": [
+      23,
+      23,
+      23
+    ],
+    "command_fault": 0,
+    "auth_assoc": [
+      0,
+      0
+    ],
+    "data_TX": [
+      0,
+      0
+    ],
+    "management_TX": [
+      0,
+      0
+    ]
+  },
+  "final": {
+    "Finished": true,
+    "AP_starts_stops": [
+      1,
+      1
+    ],
+    "result_primary_cleanup_critical": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "DMA_idle_MCU_stopped": [
+      1,
+      1
+    ],
+    "pools_retained": 0,
+    "rings_bad": 0,
+    "owned_controls_bad": 0,
+    "other_control_changes_preserved": true,
+    "command_submitted_completed_acked": [
+      32,
+      32,
+      32
+    ],
+    "command_payload_reuses": 9,
+    "command_fault": 0,
+    "MCU_TX_submitted_completed": [
+      63,
+      63
+    ],
+    "FWDL_TX": [
+      31,
+      31
+    ],
+    "RX_packets": 8099,
+    "RX0_packets_rearmed": [
+      8065,
+      8065
+    ],
+    "RX_gate_checked_accepted_rejected": [
+      8065,
+      8065,
+      0
+    ],
+    "RX0_raw_beacon_headers": 7892,
+    "active_us": 288849468,
+    "TSF_delta_us": 288889972,
+    "beacon_MIB_low16": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "beacon_snapshot_times_us": [
+      79451839,
+      79452972,
+      79455119,
+      368296241
+    ],
+    "beacon_MIB_read_may_clear_or_be_maintained_by_firmware": true,
+    "beacon_MIB_is_not_external_RF_capture": true,
+    "T0TPCR": "80010064",
+    "TQSM_beacon_enabled": "0001011f",
+    "HIF_watch_faults": [
+      0,
+      0
+    ],
+    "guard_faults": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "BSS_BASIC_period_TU": [
+      100,
+      100
+    ],
+    "BSS_BASIC_DTIM": [
+      1,
+      1
+    ],
+    "SYNC_beacon_ON_OFF_valid_status": [
+      [
+        1,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        1,
+        0
+      ]
+    ],
+    "TXD_CCK1_submitted": 0,
+    "TXD_CCK11_submitted": 0,
+    "on_air_rate_measured": false,
+    "clients_associated": 0,
+    "WPA2_handshakes": 0,
+    "GTK_PTK_authorized_BMC_after_stop": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "MemAvailable_KiB": 8168,
+    "fresh_boot_required": true,
+    "power_cycle_required": false,
+    "flash_writes": 0
+  },
+  "timer": {
+    "samples": 64,
+    "requested_sleep_ns": 1000000,
+    "min_ns": 1054600,
+    "mean_ns": 1055353,
+    "max_ns": 1082650,
+    "interrupted": 0,
+    "advertised_monotonic_realtime_resolution_ns": [
+      1,
+      1
+    ]
+  },
+  "ownership": {
+    "before_after": [
+      "00030001",
+      "00030000"
+    ],
+    "ready_wait_us": 50725,
+    "settle_us": 10075,
+    "observed_wait_us": 10059,
+    "requests": 1,
+    "retries": 0
+  },
+  "limitations": [
+    "No CCK11 data was submitted, so CCK11 physical behavior and RTT remain untested",
+    "Zero observed beacon MIB plus owner invisibility narrows the problem to AP advertisement; it does not prove an internal firmware cause",
+    "Boot power/reset history and external RF/FCS capture were not supplied",
+    "This observation does not establish repeatability or identify which initialization step caused the failure"
+  ],
+  "raw_logs_MAC_addresses_keys_packets_not_published": true,
+  "next_step": "One short control boot of the unchanged issued RAM42, without traffic load, to check advertisement repeatability"
+}

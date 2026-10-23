@@ -122,10 +122,15 @@
   "Windows_comparison_script_byte_identical_to_RAM40": true,
   "helper_guard_matches_kernel": true,
   "new_NOR_or_UBoot_write_required": false,
-  "hardware_tested": false,
+  "hardware_tested": true,
   "physical_MCU_CCMP_DMA_RF_emulated": false,
   "snapshot_kind": "Fixed CCK11 AP data; CCK1 EAPOL and management, RAM42 timings",
   "source_files_byte_identical_to_frozen_workspace": true,
   "original_personal_archive_sha256": "6799fea0ef070a2741bd3ebd9c0b1a47f3ecc18f6ffd6cf15b0d01d484887313",
-  "private_keys_binary_images_OEM_inputs_included": false
+  "private_keys_binary_images_OEM_inputs_included": false,
+  "hardware_tested_at_issuance": false,
+  "latest_hardware_status": "AP enabled, SSID not seen, observed beacon MIB stayed zero for 288.849 seconds; clean stop",
+  "physical_result_file": "RESULT-HARDWARE-VISIBILITY.json",
+  "CCK11_data_physically_submitted": false,
+  "physical_rate_and_RTT_not_tested": true
 }
